@@ -22,7 +22,12 @@ select
         join pg_roles parent on parent.oid = am.roleid
         where am.member = r.oid
           and (parent.rolsuper or parent.rolbypassrls)
-    ) as member_of_privileged
+    ) as member_of_privileged,
+    (
+        select count(*)
+        from pg_class c
+        where c.relowner = r.oid and c.relkind in ('r', 'p')
+    ) as owned_tables
 from pg_roles r
 where r.rolname = current_user
 """
@@ -41,6 +46,10 @@ async def assert_safe_database_role(connection: AsyncConnection) -> None:
         problems.append("has BYPASSRLS")
     if row["member_of_privileged"]:
         problems.append("is a member of a superuser or BYPASSRLS role")
+    if row["owned_tables"]:
+        problems.append(
+            f"owns {row['owned_tables']} table(s), so it could drop or replace the policies"
+        )
     if problems:
         raise UnsafeDatabaseRole(
             f"database role {row['rolname']!r} {' and '.join(problems)}; "
