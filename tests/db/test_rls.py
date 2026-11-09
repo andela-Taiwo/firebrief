@@ -5,6 +5,8 @@ import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from tests.db.data import TENANT_A, TENANT_B, USER_B
+
 TENANT_TABLES = {"users", "memberships"}
 SELF_SCOPED_TABLES = {"tenants"}
 REVIEWED_GLOBAL_TABLES = {"alembic_version"}
@@ -13,11 +15,6 @@ REVIEWED_GLOBAL_TABLES = {"alembic_version"}
 # enough: a policy of USING (true) would pass that and protect nothing.
 STANDARD_POLICY = ("tenant_id", "app.tenant_id", "nullif", "::uuid")
 SELF_POLICY = ("app.tenant_id", "nullif", "::uuid")
-
-TENANT_A = "018f0000-0000-7000-8000-000000000001"
-TENANT_B = "018f0000-0000-7000-8000-000000000002"
-USER_A = "018f0000-0000-7000-8000-000000000011"
-USER_B = "018f0000-0000-7000-8000-000000000012"
 
 
 async def tables(conn: AsyncConnection) -> set[str]:
@@ -99,7 +96,11 @@ async def test_policies_use_the_standard_expression(owner_engine: AsyncEngine) -
         found = policies.get(table, [])
         assert found, f"{table}: no policy, so nothing protects it"
         for name, qual, check in found:
-            for expression in (qual, check):
+            # An INSERT policy has no USING clause and a SELECT policy has no
+            # WITH CHECK, so only the expressions that exist can be inspected.
+            expressions = [expression for expression in (qual, check) if expression]
+            assert expressions, f"{table}.{name}: policy has no expression at all"
+            for expression in expressions:
                 normalised = expression.lower().replace(" ", "")
                 for fragment in fragments:
                     assert fragment in normalised, (
@@ -109,47 +110,6 @@ async def test_policies_use_the_standard_expression(owner_engine: AsyncEngine) -
                 assert normalised not in {"true", "(true)"}, (
                     f"{table}.{name}: USING (true) protects nothing"
                 )
-
-
-async def _seed(engine: AsyncEngine) -> None:
-    async with engine.begin() as conn:
-        await conn.execute(sa.text("truncate table memberships, users, tenants cascade"))
-        await conn.execute(
-            sa.text("insert into tenants (id, name) values (:a, 'Alpha'), (:b, 'Beta')"),
-            {"a": TENANT_A, "b": TENANT_B},
-        )
-        await conn.execute(
-            sa.text(
-                """
-                insert into users (id, tenant_id, email, name) values
-                    (:ua, :a, 'a@alpha.test', 'Ada'),
-                    (:ub, :b, 'b@beta.test', 'Ben')
-                """
-            ),
-            {"ua": USER_A, "ub": USER_B, "a": TENANT_A, "b": TENANT_B},
-        )
-        await conn.execute(
-            sa.text(
-                """
-                insert into memberships (id, tenant_id, user_id, role) values
-                    (:ma, :a, :ua, 'owner'),
-                    (:mb, :b, :ub, 'owner')
-                """
-            ),
-            {
-                "ma": "018f0000-0000-7000-8000-000000000021",
-                "mb": "018f0000-0000-7000-8000-000000000022",
-                "a": TENANT_A,
-                "b": TENANT_B,
-                "ua": USER_A,
-                "ub": USER_B,
-            },
-        )
-
-
-@pytest.fixture
-async def seeded(owner_engine: AsyncEngine) -> None:
-    await _seed(owner_engine)
 
 
 async def test_without_a_tenant_nothing_is_visible(app_engine: AsyncEngine, seeded: None) -> None:

@@ -107,3 +107,31 @@ Canaries to run before the PR:
    application with a check constraint? Recommendation: check constraint, for easier evolution.
 2. Is `firebrief_test` created by Compose init, or by the test harness? Recommendation: Compose,
    so the harness never creates databases.
+
+## Build notes (added during build)
+
+**Red run observed before implementation**, as planned:
+
+```
+tenant tables missing: ['memberships', 'tenants', 'users']
+```
+
+**Canaries (§10.4), each run against the live database and then restored:**
+
+| # | Break | Caught by |
+|---|---|---|
+| C1 | `ALTER TABLE users NO FORCE ROW LEVEL SECURITY` | `test_rls_is_enabled_and_forced`: "FORCE ROW LEVEL SECURITY is not set" |
+| C2 | Policy replaced with `USING (true) WITH CHECK (true)` | `test_policies_use_the_standard_expression`: "expression 'true' is not the standard tenant policy" |
+| C3 | Runtime pointed at the superuser role | `test_a_superuser_is_refused`: "is a superuser" |
+| C4 | Harness pointed at `firebrief_dev` | `owner_url`: "refusing to run against a non-test database URL" |
+
+**Deviation 1:** the first version of the policy assertion required a `USING` clause on every
+policy, which is wrong — an INSERT policy has only `WITH CHECK`. The test was corrected, not
+weakened: it now inspects whichever expressions exist and still rejects `USING (true)`.
+
+**Deviation 2:** `updated_at` is maintained by a `BEFORE UPDATE` trigger, so nothing in application
+code assigns it.
+
+**Finding for the next feature:** the runtime role's table privileges are granted by the test
+harness, not by a migration. Deployments will need an equivalent grant step; it belongs with
+`deployment` (F21), not here.
