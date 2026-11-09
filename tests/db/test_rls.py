@@ -26,9 +26,9 @@ SELF_EXPRESSION = "(id=(nullif(current_setting('app.tenant_id',true),''))::uuid)
 EXPECTED_POLICIES: dict[str, dict[str, str]] = {
     "users": {"ALL": TENANT_EXPRESSION},
     "memberships": {"ALL": TENANT_EXPRESSION},
+    # No INSERT: creating a tenant is an operator action (0005).
     "tenants": {
         "SELECT": SELF_EXPRESSION,
-        "INSERT": SELF_EXPRESSION,
         "UPDATE": SELF_EXPRESSION,
     },
 }
@@ -65,6 +65,21 @@ async def tables(conn: AsyncConnection) -> set[str]:
     return set(result.scalars().all())
 
 
+async def relations(conn: AsyncConnection) -> set[str]:
+    """Every relation a query could read: tables, partitions and views."""
+    result = await conn.execute(
+        sa.text(
+            """
+            select c.relname
+            from pg_class c
+            join pg_namespace n on n.oid = c.relnamespace
+            where n.nspname = 'public' and c.relkind in ('r', 'p', 'v', 'm')
+            """
+        )
+    )
+    return set(result.scalars().all())
+
+
 async def test_the_database_is_a_test_database(owner_engine: AsyncEngine) -> None:
     async with owner_engine.connect() as conn:
         name = (await conn.execute(sa.text("select current_database()"))).scalar_one()
@@ -81,8 +96,9 @@ async def test_expected_tables_exist(owner_engine: AsyncEngine) -> None:
 async def test_every_table_is_tenant_scoped_or_reviewed_global(
     owner_engine: AsyncEngine,
 ) -> None:
+    """Tables, partitions and views all need a decision, not just tables."""
     async with owner_engine.connect() as conn:
-        found = await tables(conn)
+        found = await relations(conn)
     unreviewed = found - TENANT_TABLES - SELF_SCOPED_TABLES - REVIEWED_GLOBAL_TABLES
     assert not unreviewed, (
         "tables are neither tenant-scoped nor on the reviewed global list: "
@@ -188,11 +204,10 @@ async def test_the_tenant_table_has_no_delete_policy(owner_engine: AsyncEngine) 
 async def test_deleting_a_tenant_is_refused_by_the_database(
     app_engine: AsyncEngine, seeded: None
 ) -> None:
+    """DELETE is not granted on tenants, so this is a permission error, not a filter."""
     async with tenant_session(app_engine, uuid.UUID(TENANT_A)) as session:
-        result = await session.execute(
-            sa.text("delete from tenants where id = :id"), {"id": TENANT_A}
-        )
-    assert rowcount(result) == 0
+        with pytest.raises(DBAPIError, match="permission denied"):
+            await session.execute(sa.text("delete from tenants where id = :id"), {"id": TENANT_A})
 
 
 async def test_without_a_tenant_nothing_is_visible(app_engine: AsyncEngine, seeded: None) -> None:
@@ -261,18 +276,29 @@ async def test_a_tenant_cannot_update_or_delete_another_tenants_row(
     assert rowcount(deleted) == 0
 
 
+@pytest.mark.parametrize("table", sorted(TENANT_TABLES))
 async def test_a_tenant_cannot_insert_a_row_for_another_tenant(
-    app_engine: AsyncEngine, seeded: None
+    app_engine: AsyncEngine, seeded: None, table: str
 ) -> None:
     async with tenant_session(app_engine, uuid.UUID(TENANT_A)) as session:
-        with pytest.raises(DBAPIError):
-            await session.execute(
-                sa.text(
-                    "insert into users (id, tenant_id, email, name) "
-                    "values (:id, :t, 'x@beta.test', 'X')"
-                ),
-                {"id": "018f0000-0000-7000-8000-000000000098", "t": TENANT_B},
+        if table == "users":
+            statement = sa.text(
+                "insert into users (id, tenant_id, email, name) "
+                "values (:id, :t, 'x@beta.test', 'X')"
             )
+            params: dict[str, str] = {"id": "018f0000-0000-7000-8000-000000000098", "t": TENANT_B}
+        else:
+            statement = sa.text(
+                "insert into memberships (id, tenant_id, user_id, role) "
+                "values (:id, :t, :u, 'viewer')"
+            )
+            params = {
+                "id": "018f0000-0000-7000-8000-000000000094",
+                "t": TENANT_B,
+                "u": USER_B,
+            }
+        with pytest.raises(DBAPIError):
+            await session.execute(statement, params)
 
 
 async def test_a_membership_cannot_point_at_another_tenants_user(
@@ -320,3 +346,35 @@ async def test_a_membership_can_still_point_at_a_user_of_its_own_tenant(
         )
         count = (await session.execute(sa.text("select count(*) from memberships"))).scalar_one()
     assert count == 2
+
+
+async def test_the_app_role_has_no_privileges_on_the_migration_table(
+    app_engine: AsyncEngine,
+) -> None:
+    """alembic_version has no RLS, so the grant is the only thing protecting it.
+
+    Checked privilege by privilege: an UPDATE alone would still fail without
+    SELECT on the column, which would make a behavioural test pass for the wrong
+    reason.
+    """
+    async with app_engine.connect() as connection:
+        row = (
+            (
+                await connection.execute(
+                    sa.text(
+                        """
+                    select
+                        has_table_privilege(current_user, 'alembic_version', 'SELECT') as sel,
+                        has_table_privilege(current_user, 'alembic_version', 'INSERT') as ins,
+                        has_table_privilege(current_user, 'alembic_version', 'UPDATE') as upd,
+                        has_table_privilege(current_user, 'alembic_version', 'DELETE') as del
+                    """
+                    )
+                )
+            )
+            .mappings()
+            .one()
+        )
+
+    granted = [name for name, value in row.items() if value]
+    assert not granted, f"the runtime role has {granted} on alembic_version"

@@ -41,19 +41,6 @@ async def test_a_session_cannot_be_opened_without_a_tenant(app_engine: AsyncEngi
             pass
 
 
-async def test_the_tenant_does_not_leak_to_the_next_connection(
-    app_engine: AsyncEngine, seeded: None
-) -> None:
-    async with tenant_session(app_engine, uuid.UUID(TENANT_A)) as session:
-        await session.execute(sa.text("select 1"))
-
-    async with app_engine.connect() as connection:
-        leaked = (
-            await connection.execute(sa.text("select current_setting('app.tenant_id', true)"))
-        ).scalar_one()
-    assert leaked in (None, ""), f"tenant setting survived the transaction: {leaked!r}"
-
-
 async def test_the_tenant_does_not_leak_between_transactions_on_one_connection(
     app_url: str, seeded: None
 ) -> None:

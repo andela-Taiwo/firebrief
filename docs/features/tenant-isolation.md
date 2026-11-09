@@ -151,3 +151,31 @@ harness, not by a migration. Deployments will need an equivalent grant step; it 
 | M | Seeding relied on a superuser | Truncate is the only privileged statement; rows are written through the runtime role inside a tenant session, so the seed exercises the policies too |
 | M | Partitions and views unhandled | Invariant covers `relkind in ('r','p')`; no views exist, and any added view must be on the reviewed list |
 | M | PR template placeholders | Template trimmed to prompts, not angle-bracket placeholders |
+
+## Re-review responses
+
+| Sev | Finding | Response |
+|---|---|---|
+| **B** | Migrations ran before the server-side database check | `migrated` now asks `current_database()` **before** alembic runs; the URL check uses `make_url(...).database.endswith("_test")` |
+| **H** | Grants lived in a test fixture, so production never got them | `0004_grants` grants per table: tenants get SELECT/INSERT/UPDATE (no DELETE), users and memberships get full DML, `alembic_version` gets nothing. It revokes first, so a role with wider historical grants cannot keep them |
+| **H** | Tenant delete was filtered, not refused | With DELETE not granted, the runtime role gets a permission error. The test now asserts the error rather than a zero row count |
+| **H** | Only the superuser case was covered for the role check | Real roles created in tests: a BYPASSRLS role and a role that owns a table. `assert_safe_database_role` now also refuses a role that owns tables, because it could drop or replace the policies |
+| M | Update/delete/insert tests covered `users` only | Parametrised over every tenant table |
+| M | The NullPool leak test could never fail | Removed; the `pool_size=1` test is the real one |
+| M | Tenant creation was open to any session with an arbitrary UUID | `0005_privileged_tenants` drops the INSERT policy. Creating a tenant is an onboarding action; the seed creates tenants as the owner |
+| M | Views were not reviewed | The invariant now covers `relkind ('r','p','v','m')` |
+| M | `test_the_database_is_a_test_database` is redundant | Kept deliberately, as executable documentation of the rule |
+| M | PR title and description still said "before implementing it" | Rewritten for the reply; the code branch is unchanged |
+
+### Canaries added by this round
+
+| # | Break | Caught by |
+|---|---|---|
+| C7 | `GRANT DELETE ON tenants TO firebrief_app` | delete test: "DID NOT RAISE" |
+| C8 | `GRANT SELECT, UPDATE ON alembic_version` | privilege test naming the granted privileges |
+| C10 | Migrating with `FIREBRIEF_APP_ROLE` set to a role that does not exist | migration aborts: "does not exist; create it before" |
+
+**Weak test found while canarying C8:** the first version asserted that an `UPDATE` on
+`alembic_version` raised. It would have passed even with `UPDATE` granted, because `UPDATE`
+also needs `SELECT` on the referenced column, which was absent. The test now asks
+`has_table_privilege` for each of SELECT/INSERT/UPDATE/DELETE, so it fails for the right reason.

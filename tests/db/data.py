@@ -43,15 +43,20 @@ FIXTURES = (
 
 
 async def seed(owner_engine: AsyncEngine, app_engine: AsyncEngine) -> None:
+    # Tenant creation is a privileged onboarding action (0005), so the fixtures
+    # create tenants as the owner. Everything else is written through the
+    # runtime role, inside a tenant session, exercising the same policies a real
+    # write would.
     async with owner_engine.begin() as connection:
         await connection.execute(sa.text("truncate table memberships, users, tenants cascade"))
-
-    for fixture in FIXTURES:
-        async with tenant_session(app_engine, uuid.UUID(fixture.tenant_id)) as session:
-            await session.execute(
+        for fixture in FIXTURES:
+            await connection.execute(
                 sa.text("insert into tenants (id, name) values (:id, :name)"),
                 {"id": fixture.tenant_id, "name": fixture.name},
             )
+
+    for fixture in FIXTURES:
+        async with tenant_session(app_engine, uuid.UUID(fixture.tenant_id)) as session:
             await session.execute(
                 sa.text(
                     "insert into users (id, tenant_id, email, name) "
