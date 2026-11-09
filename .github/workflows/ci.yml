@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies (lockfile enforced)
+        run: uv sync --locked --all-groups
+
+      - name: Lint
+        run: make lint
+
+      - name: Format check
+        run: make fmt-check
+
+      - name: Types (deprecations are errors)
+        run: make types
+
+      - name: Module boundaries
+        run: make boundaries
+
+      - name: Dependency licences
+        run: make licenses
+
+      - name: Secret scan (full history)
+        run: make secrets
+
+      - name: Tests
+        run: make test
+
+  docker:
+    name: docker
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Build image, prove it imports and runs non-root
+        run: make docker-smoke
