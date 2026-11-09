@@ -96,3 +96,30 @@ from chunks; make the chunker ignore the token budget.
 | C23 | Uniqueness on `(version_id, model, ordinal)` dropped | re-embed test: `ON CONFLICT` has no matching constraint, so ingestion fails loudly rather than duplicating (caught, though as an error rather than a duplicate) |
 | C24 | Chunker stops respecting the token budget | budget test: one chunk where several were expected |
 | C25 | `chunks` not added to the reviewed global list | the invariant test failed the moment the table was created, which is exactly the design |
+
+## Review responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| **Must** | Chunks could not be traced to their section; `heading_path` is not unique | `section_id` foreign key plus `char_start`/`char_end` into the section body. The two "Notes" sections in the fixture resolve to different ids and different text |
+| **Must** | Changing chunk settings silently mixed sets | The chunker configuration is part of the key (`words-v1:300/50`), so a new budget produces a complete second set; tested with two configurations |
+| **Must** | `embed_version` returned work it had not done | It returns `EmbedResult(created, existing)`, counted from `RETURNING`; the re-embed test asserts `created == 0` |
+| Should | Embedding bypassed the budget and was sent whole | Inputs are batched at 64. **Spend is not yet charged to a budget** — the corpus is global, not tenant-owned, so there is no budget to charge. Recorded as a follow-up for the ingestion operator job, not silently skipped |
+| Should | `OpenAIEmbedder` sent no key | The key is a constructor argument and is sent as a Bearer header; request shape, header and `index` ordering are tested with `MockTransport` |
+| Should | No vector validation | Count, dimensions and NaN/inf are checked before writing; `dimensions` is a column with a check constraint that the array length matches |
+| Should | Only the body was embedded | The embedding input is `heading_path + "\n\n" + text`, while `text` stores the body alone. Measuring the difference belongs to the evaluation harness |
+| Test gap | Overlap test used substring matching | Compares word lists and asserts the exact configured overlap |
+| Test gap | No wrong-count, dimension, long-section or long-word tests | Added, including an end-to-end split of a 600-word section |
+| Minor | Quadratic splitting | The window measures characters, not re-joined strings |
+| Minor | One insert per chunk | A single multi-row insert |
+| Minor | `.unique()` was unnecessary | Removed |
+| Deferred | Sentence and row boundaries | Still word-based; recorded as a quality follow-up |
+| Deferred | Semantic `FakeEmbedder` | The hash fake is deterministic but meaningless for ranking; retrieval tests in F5 need a hashed bag-of-words fake |
+
+### Canaries added
+
+| # | Break | Caught by |
+|---|---|---|
+| C26 | Every chunk points at the first section | "Notes" test: `first_id != second_id` |
+| C27 | Chunker configuration removed from the key | second configuration reports `created == 0` |
+| C28 | `created` reports all chunks rather than inserted ones | re-embed test: `6 == 0` fails |
