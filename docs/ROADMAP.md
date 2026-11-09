@@ -15,7 +15,7 @@ Build order is dependency order, not importance. v1 ships the block up to the cu
 
 | Feature | Goal | Depends on | Status |
 |---|---|---|---|
-| `tenant-isolation` | RLS with FORCE, per-transaction tenant, start-up role check, invariant test | repo-foundation | Awaiting sign-off |
+| `tenant-isolation` | RLS with FORCE, per-transaction tenant, start-up role check, invariant test | repo-foundation | In review |
 | `corpus-ingestion` | Snapshot GOV.UK guidance with licence, edition and effective dates | tenant-isolation | Not started |
 | `chunk-and-embed` | Structure-aware chunks, versioned embeddings | corpus-ingestion | Not started |
 | `hybrid-retrieval` | Vector + full-text fusion, recall measured | chunk-and-embed | Not started |

@@ -51,7 +51,13 @@ jobs:
       - name: Secret scan (full history)
         run: make secrets
 
-      - name: Tests
+      - name: Start services (same Compose file as local)
+        run: docker compose up -d --wait
+
+      - name: Migrations round-trip and drift check
+        run: make db-roundtrip
+
+      - name: Tests (real PostgreSQL, not SQLite)
         run: make test
 
   docker:

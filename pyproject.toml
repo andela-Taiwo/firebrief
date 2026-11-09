@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.9.2",
     "pydantic-settings>=2.5.2",
     "sqlalchemy[asyncio]>=2.0.36",
+    "uuid6>=2024.7.10",
 ]
 
 [dependency-groups]
@@ -54,9 +55,12 @@ ignore = ["S101"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "S311", "PT011"]
+# Migrations build DDL by construction; every one is read by a person before it
+# is committed, and the only interpolated value is a validated role identifier.
+"migrations/versions/*.py" = ["S608"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["firebrief"]
+known-first-party = ["firebrief", "tests"]
 
 [tool.pyright]
 include = ["src", "tests"]

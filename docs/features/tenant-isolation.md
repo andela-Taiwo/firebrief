@@ -107,3 +107,95 @@ Canaries to run before the PR:
    application with a check constraint? Recommendation: check constraint, for easier evolution.
 2. Is `firebrief_test` created by Compose init, or by the test harness? Recommendation: Compose,
    so the harness never creates databases.
+
+## Build notes (added during build)
+
+**Red run observed before implementation**, as planned:
+
+```
+tenant tables missing: ['memberships', 'tenants', 'users']
+```
+
+**Canaries (§10.4), each run against the live database and then restored:**
+
+| # | Break | Caught by |
+|---|---|---|
+| C1 | `ALTER TABLE users NO FORCE ROW LEVEL SECURITY` | `test_rls_is_enabled_and_forced`: "FORCE ROW LEVEL SECURITY is not set" |
+| C2 | Policy replaced with `USING (true) WITH CHECK (true)` | `test_policies_use_the_standard_expression`: "expression 'true' is not the standard tenant policy" |
+| C3 | Runtime pointed at the superuser role | `test_a_superuser_is_refused`: "is a superuser" |
+| C4 | Harness pointed at `firebrief_dev` | `owner_url`: "refusing to run against a non-test database URL" |
+
+**Deviation 1:** the first version of the policy assertion required a `USING` clause on every
+policy, which is wrong — an INSERT policy has only `WITH CHECK`. The test was corrected, not
+weakened: it now inspects whichever expressions exist and still rejects `USING (true)`.
+
+**Deviation 2:** `updated_at` is maintained by a `BEFORE UPDATE` trigger, so nothing in application
+code assigns it.
+
+**Finding for the next feature:** the runtime role's table privileges are granted by the test
+harness, not by a migration. Deployments will need an equivalent grant step; it belongs with
+`deployment` (F21), not here.
+
+## Review findings and responses
+
+| Sev | Finding | Response |
+|---|---|---|
+| B1 | Safety check ran after the destructive seed; URL guard was a substring match | `make_url()` now parses the URL and requires `endswith("_test")`; every engine fixture asks the server `current_database()` before it is used, so nothing destructive runs first |
+| B2 | Delete check missed `FOR ALL` | Now rejects `{"DELETE", "ALL"}`, plus a behavioural test: the runtime role deletes zero rows from `tenants` |
+| H3 | Policy check was brittle (NULL `with_check`, fragment matching, `permissive`/`roles` unverified) | Compares against one canonical normalised expression; checks `with_check` only for INSERT/UPDATE/ALL; asserts `PERMISSIVE` and `roles = {public}` |
+| H4 | Foreign keys bypass RLS; a membership could point at another tenant's user | Composite key `(tenant_id, user_id) → users(tenant_id, id)` in `0003_composite_fk`, with a negative and a positive test |
+| H5 | No proof the runtime role cannot bypass RLS | Tests assert `rolsuper = false`, `rolbypassrls = false`, and that it owns no tables |
+| H6 | Merging the tests alone turns `main` red | This branch now contains the implementation; merge it squashed, as one feature |
+| M | Tenant context leak between transactions on one connection | Test with `pool_size=1`: two transactions, two tenants, no carry-over |
+| M | Isolation tests not parametrised over every tenant table | Parametrised over `users` and `memberships` |
+| M | Seeding relied on a superuser | Truncate is the only privileged statement; rows are written through the runtime role inside a tenant session, so the seed exercises the policies too |
+| M | Partitions and views unhandled | Invariant covers `relkind in ('r','p')`; no views exist, and any added view must be on the reviewed list |
+| M | PR template placeholders | Template trimmed to prompts, not angle-bracket placeholders |
+
+## Re-review responses
+
+| Sev | Finding | Response |
+|---|---|---|
+| **B** | Migrations ran before the server-side database check | `migrated` now asks `current_database()` **before** alembic runs; the URL check uses `make_url(...).database.endswith("_test")` |
+| **H** | Grants lived in a test fixture, so production never got them | `0004_grants` grants per table: tenants get SELECT/INSERT/UPDATE (no DELETE), users and memberships get full DML, `alembic_version` gets nothing. It revokes first, so a role with wider historical grants cannot keep them |
+| **H** | Tenant delete was filtered, not refused | With DELETE not granted, the runtime role gets a permission error. The test now asserts the error rather than a zero row count |
+| **H** | Only the superuser case was covered for the role check | Real roles created in tests: a BYPASSRLS role and a role that owns a table. `assert_safe_database_role` now also refuses a role that owns tables, because it could drop or replace the policies |
+| M | Update/delete/insert tests covered `users` only | Parametrised over every tenant table |
+| M | The NullPool leak test could never fail | Removed; the `pool_size=1` test is the real one |
+| M | Tenant creation was open to any session with an arbitrary UUID | `0005_privileged_tenants` drops the INSERT policy. Creating a tenant is an onboarding action; the seed creates tenants as the owner |
+| M | Views were not reviewed | The invariant now covers `relkind ('r','p','v','m')` |
+| M | `test_the_database_is_a_test_database` is redundant | Kept deliberately, as executable documentation of the rule |
+| M | PR title and description still said "before implementing it" | Rewritten for the reply; the code branch is unchanged |
+
+### Canaries added by this round
+
+| # | Break | Caught by |
+|---|---|---|
+| C7 | `GRANT DELETE ON tenants TO firebrief_app` | delete test: "DID NOT RAISE" |
+| C8 | `GRANT SELECT, UPDATE ON alembic_version` | privilege test naming the granted privileges |
+| C10 | Migrating with `FIREBRIEF_APP_ROLE` set to a role that does not exist | migration aborts: "does not exist; create it before" |
+
+**Weak test found while canarying C8:** the first version asserted that an `UPDATE` on
+`alembic_version` raised. It would have passed even with `UPDATE` granted, because `UPDATE`
+also needs `SELECT` on the referenced column, which was absent. The test now asks
+`has_table_privilege` for each of SELECT/INSERT/UPDATE/DELETE, so it fails for the right reason.
+
+## Re-review 2 responses
+
+| Sev | Finding | Response |
+|---|---|---|
+| S1 | Test roles are cluster-wide and could collide | Names carry a random suffix (`firebrief_bypass_<8 hex>`); the conftest docstring records that this needs CREATEROLE; teardown drops them. Verified: after a run, `pg_roles` holds only `firebrief` and `firebrief_app` |
+| S2 | `canary_owned` in `public` could trip the invariant test | The table lives in a per-run `canary_<8 hex>` schema, dropped with `DROP SCHEMA ... CASCADE` in teardown. Verified: no `canary%` schemas remain |
+| S3 | `data.py` docstring was stale | Updated to say tenants are inserted as the owner and the TRUNCATE is the other privileged statement |
+| N1 | Update/delete not parametrised over tenant tables | Now parametrised. **The previous round claimed this was done; it was not.** The patch did not match the file after formatting, and I reported it without checking. The memberships case is now covered and the suite has 66 tests, not 64 |
+| N2 | No rule for safe views | `test_views_use_security_invoker` requires `security_invoker=true` on any view; materialised views are called out as needing separate review because they have no such option |
+| N3 | Duplicated name-check helpers | One `_database_name` plus `_assert_is_test_database`, used synchronously and asynchronously |
+| N4 | Redundant `test_the_database_is_a_test_database` | Kept as executable documentation |
+| N5 | PR title/description | Suggested in the reply; `gh` is unauthenticated in this environment, so the PR itself is unchanged |
+
+### Process note
+
+N1 is the second time a claim of mine outran the evidence (the first was lint, where an
+untracked `tests/__init__.py` made a dirty working tree look green). The rule from here:
+a change is only reported when a command in the transcript shows it, and `make check` is
+run from a clean clone before a PR is called ready.
