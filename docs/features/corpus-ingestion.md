@@ -80,3 +80,16 @@ from the reviewed list; re-ingest and assert no duplicate.
 ## Effort
 
 4 dev-days, one PR.
+
+## Build notes (added during build)
+
+- **Writer role.** Ingestion writes as the owner/worker role, never as the runtime role. The
+  runtime role has `SELECT` only on the three corpus tables, which is what the API will need and
+  nothing more. There is no CLI to run ingestion yet; it is called from a test and will be called
+  from an operator command in F3.1.
+- **Concurrent ingestion.** Two workers ingesting the same document at once would race on
+  `uq_document_versions_sha`; the loser gets an integrity error rather than a duplicate. The
+  worker is single-process today, so this is recorded rather than handled.
+- **Unchanged bytes still refresh title and URL.** The version and sections are untouched, but
+  `documents.title` and `documents.source_url` are updated, so a corrected title propagates
+  without a new version. Worth revisiting if the title is ever used in a citation.
