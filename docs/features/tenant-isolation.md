@@ -135,3 +135,19 @@ code assigns it.
 **Finding for the next feature:** the runtime role's table privileges are granted by the test
 harness, not by a migration. Deployments will need an equivalent grant step; it belongs with
 `deployment` (F21), not here.
+
+## Review findings and responses
+
+| Sev | Finding | Response |
+|---|---|---|
+| B1 | Safety check ran after the destructive seed; URL guard was a substring match | `make_url()` now parses the URL and requires `endswith("_test")`; every engine fixture asks the server `current_database()` before it is used, so nothing destructive runs first |
+| B2 | Delete check missed `FOR ALL` | Now rejects `{"DELETE", "ALL"}`, plus a behavioural test: the runtime role deletes zero rows from `tenants` |
+| H3 | Policy check was brittle (NULL `with_check`, fragment matching, `permissive`/`roles` unverified) | Compares against one canonical normalised expression; checks `with_check` only for INSERT/UPDATE/ALL; asserts `PERMISSIVE` and `roles = {public}` |
+| H4 | Foreign keys bypass RLS; a membership could point at another tenant's user | Composite key `(tenant_id, user_id) → users(tenant_id, id)` in `0003_composite_fk`, with a negative and a positive test |
+| H5 | No proof the runtime role cannot bypass RLS | Tests assert `rolsuper = false`, `rolbypassrls = false`, and that it owns no tables |
+| H6 | Merging the tests alone turns `main` red | This branch now contains the implementation; merge it squashed, as one feature |
+| M | Tenant context leak between transactions on one connection | Test with `pool_size=1`: two transactions, two tenants, no carry-over |
+| M | Isolation tests not parametrised over every tenant table | Parametrised over `users` and `memberships` |
+| M | Seeding relied on a superuser | Truncate is the only privileged statement; rows are written through the runtime role inside a tenant session, so the seed exercises the policies too |
+| M | Partitions and views unhandled | Invariant covers `relkind in ('r','p')`; no views exist, and any added view must be on the reviewed list |
+| M | PR template placeholders | Template trimmed to prompts, not angle-bracket placeholders |

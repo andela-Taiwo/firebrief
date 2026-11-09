@@ -1,6 +1,6 @@
 ## Feature
 
-<feature-name>. Plan: `docs/features/<feature-name>.md`
+Plan: `docs/features/<name>.md`
 
 ## What changed
 
@@ -9,11 +9,17 @@
 ## How it was verified
 
 - [ ] `make check` green locally
-- [ ] `make secrets` green (and it scanned a non-zero number of commits)
-- [ ] tests written first; red runs observed for the right reason
-- [ ] canaries run: `<break>` → caught by `<test>`
-- [ ] independent review run; findings below
+- [ ] `make secrets` green, and it scanned a non-zero number of commits
+- [ ] tests written first; the red run is quoted below
+- [ ] canaries run; each break is listed with the test that caught it
+- [ ] independent review run; findings and responses below
 - [ ] area invariants / trade-offs doc updated
+
+## Red run
+
+```
+<paste the first failing run>
+```
 
 ## Reviewer findings and responses
 

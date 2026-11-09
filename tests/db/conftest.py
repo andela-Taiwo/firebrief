@@ -17,10 +17,6 @@ from tests.db.data import seed
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# The harness refuses anything that is not plainly a test database. The check is
-# made twice: once on the URL here, and once against the server's own
-# current_database() (see tests/db/test_rls.py), because a ?database= override
-# in the URL would otherwise slip past.
 OWNER_URL = os.environ.get(
     "FIREBRIEF_TEST_DATABASE_URL",
     "postgresql+asyncpg://firebrief:firebrief_dev@127.0.0.1:55433/firebrief_test",
@@ -31,35 +27,47 @@ APP_URL = os.environ.get(
 )
 
 
-def _database_name(url: str) -> str:
-    return (make_url(url).database or "").removesuffix("?database=firebrief_dev")
+def _require_test_database(url: str) -> str:
+    """Refuse anything that is not a *_test database, read from the URL.
+
+    make_url strips the query string, so `?database=firebrief_dev` cannot hide
+    the real name from this check.
+    """
+    name = make_url(url).database or ""
+    if not name.endswith("_test"):
+        raise pytest.UsageError(f"refusing to run against a non-test database URL: {url}")
+    return url
+
+
+async def _assert_server_is_test_database(engine: AsyncEngine) -> None:
+    """Ask the server what database this really is, before anything destructive."""
+    async with engine.connect() as connection:
+        name = (await connection.execute(sa.text("select current_database()"))).scalar_one()
+    if not str(name).endswith("_test"):
+        raise RuntimeError(f"refusing to run against {name}: not a *_test database")
 
 
 @pytest.fixture(scope="session")
 def owner_url() -> str:
-    if not _database_name(OWNER_URL).endswith("_test"):
-        raise pytest.UsageError(f"refusing to run against a non-test database URL: {OWNER_URL}")
-    return OWNER_URL
+    return _require_test_database(OWNER_URL)
 
 
 @pytest.fixture(scope="session")
 def app_url() -> str:
-    if not _database_name(APP_URL).endswith("_test"):
-        raise pytest.UsageError(f"refusing to run against a non-test database URL: {APP_URL}")
-    return APP_URL
+    return _require_test_database(APP_URL)
 
 
-def _grant(owner_url: str, app_user: str) -> None:
+def _grant(owner_url_value: str, app_user: str) -> None:
     async def run() -> None:
-        engine = create_async_engine(owner_url, poolclass=sa.pool.NullPool)
+        engine = create_async_engine(owner_url_value, poolclass=sa.pool.NullPool)
         try:
-            async with engine.begin() as conn:
-                await conn.execute(sa.text(f'grant usage on schema public to "{app_user}"'))
-                await conn.execute(
+            async with engine.begin() as connection:
+                await connection.execute(sa.text(f'grant usage on schema public to "{app_user}"'))
+                await connection.execute(
                     sa.text(
                         f"grant select, insert, update, delete on all tables "
                         f'in schema public to "{app_user}"'
-                    )
+                    ),
                 )
         finally:
             await engine.dispose()
@@ -92,6 +100,7 @@ def migrated(owner_url: str, app_url: str) -> None:
 async def owner_engine(owner_url: str) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(owner_url, poolclass=sa.pool.NullPool)
     try:
+        await _assert_server_is_test_database(engine)
         yield engine
     finally:
         await engine.dispose()
@@ -101,11 +110,12 @@ async def owner_engine(owner_url: str) -> AsyncIterator[AsyncEngine]:
 async def app_engine(app_url: str) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(app_url, poolclass=sa.pool.NullPool)
     try:
+        await _assert_server_is_test_database(engine)
         yield engine
     finally:
         await engine.dispose()
 
 
 @pytest.fixture
-async def seeded(owner_engine: AsyncEngine) -> None:
-    await seed(owner_engine)
+async def seeded(owner_engine: AsyncEngine, app_engine: AsyncEngine) -> None:
+    await seed(owner_engine, app_engine)

@@ -1,25 +1,66 @@
 from __future__ import annotations
 
+import uuid
+from typing import Any, cast
+
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from firebrief.db.session import tenant_session
 from tests.db.data import TENANT_A, TENANT_B, USER_B
 
 TENANT_TABLES = {"users", "memberships"}
 SELF_SCOPED_TABLES = {"tenants"}
 REVIEWED_GLOBAL_TABLES = {"alembic_version"}
 
-# What the invariant test insists on. Checking that *a* policy exists is not
-# enough: a policy of USING (true) would pass that and protect nothing.
-STANDARD_POLICY = ("tenant_id", "app.tenant_id", "nullif", "::uuid")
-SELF_POLICY = ("app.tenant_id", "nullif", "::uuid")
+# One canonical expression, compared exactly after normalisation. Fragment
+# matching would accept "... OR true"; this cannot.
+TENANT_EXPRESSION = "(tenant_id=(nullif(current_setting('app.tenant_id',true),''))::uuid)"
+SELF_EXPRESSION = "(id=(nullif(current_setting('app.tenant_id',true),''))::uuid)"
+
+# cmd -> the single expression that policy must carry. SELECT policies have no
+# WITH CHECK, INSERT policies have no USING, so only what exists is compared.
+EXPECTED_POLICIES: dict[str, dict[str, str]] = {
+    "users": {"ALL": TENANT_EXPRESSION},
+    "memberships": {"ALL": TENANT_EXPRESSION},
+    "tenants": {
+        "SELECT": SELF_EXPRESSION,
+        "INSERT": SELF_EXPRESSION,
+        "UPDATE": SELF_EXPRESSION,
+    },
+}
+
+
+def rowcount(result: Any) -> int:
+    """SQLAlchemy types execute() as Result; DELETE returns a CursorResult."""
+    return cast(CursorResult[Any], result).rowcount
+
+
+def normalise(expression: str) -> str:
+    """PostgreSQL's own rendering, minus whitespace and the ::text casts.
+
+    Parentheses are kept: removing them would turn nullif(...) into
+    nullif..., which is a different expression. The canonical form is what the
+    pinned PostgreSQL major version renders, so a formatting change fails the
+    test loudly rather than silently.
+    """
+    without_casts = expression.lower().replace("::text", "")
+    return "".join(without_casts.split())
 
 
 async def tables(conn: AsyncConnection) -> set[str]:
     result = await conn.execute(
-        sa.text("select tablename from pg_tables where schemaname = 'public'")
+        sa.text(
+            """
+            select c.relname
+            from pg_class c
+            join pg_namespace n on n.oid = c.relnamespace
+            where n.nspname = 'public' and c.relkind in ('r', 'p')
+            """
+        )
     )
     return set(result.scalars().all())
 
@@ -44,7 +85,8 @@ async def test_every_table_is_tenant_scoped_or_reviewed_global(
         found = await tables(conn)
     unreviewed = found - TENANT_TABLES - SELF_SCOPED_TABLES - REVIEWED_GLOBAL_TABLES
     assert not unreviewed, (
-        f"tables are neither tenant-scoped nor on the reviewed global list: {sorted(unreviewed)}"
+        "tables are neither tenant-scoped nor on the reviewed global list: "
+        f"{sorted(unreviewed)} (partitions are reviewed the same way as tables)"
     )
 
 
@@ -57,7 +99,7 @@ async def test_rls_is_enabled_and_forced(owner_engine: AsyncEngine) -> None:
                     select c.relname, c.relrowsecurity, c.relforcerowsecurity
                     from pg_class c
                     join pg_namespace n on n.oid = c.relnamespace
-                    where n.nspname = 'public' and c.relkind = 'r'
+                    where n.nspname = 'public' and c.relkind in ('r', 'p')
                     """
                 )
             )
@@ -71,45 +113,86 @@ async def test_rls_is_enabled_and_forced(owner_engine: AsyncEngine) -> None:
         assert forced, f"{table}: FORCE ROW LEVEL SECURITY is not set"
 
 
-async def test_policies_use_the_standard_expression(owner_engine: AsyncEngine) -> None:
+async def test_policies_are_the_standard_expressions(owner_engine: AsyncEngine) -> None:
     async with owner_engine.connect() as conn:
         rows = (
-            await conn.execute(
-                sa.text(
-                    """
-                    select tablename, policyname, qual, with_check
+            (
+                await conn.execute(
+                    sa.text(
+                        """
+                    select tablename, policyname, permissive, roles, cmd, qual, with_check
                     from pg_policies
                     where schemaname = 'public'
                     """
+                    )
                 )
             )
-        ).all()
+            .mappings()
+            .all()
+        )
 
-    policies: dict[str, list[tuple[str, str, str]]] = {}
-    for table, name, qual, check in rows:
-        policies.setdefault(table, []).append((name, qual or "", check or ""))
+    by_table: dict[str, dict[str, dict[str, Any]]] = {}
+    for row in rows:
+        by_table.setdefault(str(row["tablename"]), {})[str(row["cmd"])] = dict(row)
 
-    for table, fragments in (
-        *[(t, STANDARD_POLICY) for t in sorted(TENANT_TABLES)],
-        *[(t, SELF_POLICY) for t in sorted(SELF_SCOPED_TABLES)],
-    ):
-        found = policies.get(table, [])
-        assert found, f"{table}: no policy, so nothing protects it"
-        for name, qual, check in found:
-            # An INSERT policy has no USING clause and a SELECT policy has no
-            # WITH CHECK, so only the expressions that exist can be inspected.
-            expressions = [expression for expression in (qual, check) if expression]
-            assert expressions, f"{table}.{name}: policy has no expression at all"
-            for expression in expressions:
-                normalised = expression.lower().replace(" ", "")
-                for fragment in fragments:
-                    assert fragment in normalised, (
-                        f"{table}.{name}: expression {expression!r} is not the standard "
-                        f"tenant policy (missing {fragment!r})"
-                    )
-                assert normalised not in {"true", "(true)"}, (
-                    f"{table}.{name}: USING (true) protects nothing"
+    for table, expected in EXPECTED_POLICIES.items():
+        found = by_table.get(table, {})
+        assert set(found) == set(expected), (
+            f"{table}: expected commands {sorted(expected)}, found {sorted(found)}"
+        )
+        for command, expression in expected.items():
+            policy = found[command]
+            assert policy["permissive"] == "PERMISSIVE", (
+                f"{table}.{command}: a restrictive policy is ANDed, not the standard"
+            )
+            assert list(policy["roles"]) == ["public"], (
+                f"{table}.{command}: policy applies to {policy['roles']}, not to PUBLIC"
+            )
+
+            if command in ("SELECT", "UPDATE", "ALL"):
+                qual = str(policy["qual"] or "")
+                assert qual, f"{table}.{command}: no USING expression"
+                assert normalise(qual) == expression, (
+                    f"{table}.{command}: USING {qual!r} is not the standard policy"
                 )
+
+            if command in ("INSERT", "UPDATE", "ALL"):
+                check = str(policy["with_check"] or "")
+                assert check, f"{table}.{command}: no WITH CHECK expression"
+                assert normalise(check) == expression, (
+                    f"{table}.{command}: WITH CHECK {check!r} is not the standard policy"
+                )
+
+
+async def test_the_tenant_table_has_no_delete_policy(owner_engine: AsyncEngine) -> None:
+    async with owner_engine.connect() as conn:
+        commands = (
+            (
+                await conn.execute(
+                    sa.text(
+                        "select cmd from pg_policies where schemaname = 'public' "
+                        "and tablename = 'tenants'"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert not {"DELETE", "ALL"} & set(commands), (
+        "deleting a tenant cascades to all of its data, so no policy may permit it; "
+        f"found {sorted(commands)}"
+    )
+
+
+async def test_deleting_a_tenant_is_refused_by_the_database(
+    app_engine: AsyncEngine, seeded: None
+) -> None:
+    async with tenant_session(app_engine, uuid.UUID(TENANT_A)) as session:
+        result = await session.execute(
+            sa.text("delete from tenants where id = :id"), {"id": TENANT_A}
+        )
+    assert rowcount(result) == 0
 
 
 async def test_without_a_tenant_nothing_is_visible(app_engine: AsyncEngine, seeded: None) -> None:
@@ -131,23 +214,35 @@ async def test_without_a_tenant_writes_are_rejected(app_engine: AsyncEngine, see
             )
 
 
-async def test_a_tenant_sees_only_its_own_rows(app_engine: AsyncEngine, seeded: None) -> None:
-    async with app_engine.begin() as conn:
-        await conn.execute(sa.text("select set_config('app.tenant_id', :t, true)"), {"t": TENANT_A})
-        tenants = (await conn.execute(sa.text("select name from tenants"))).scalars().all()
-        users = (await conn.execute(sa.text("select email from users"))).scalars().all()
+async def test_a_tenant_sees_only_its_own_tenants_row(
+    app_engine: AsyncEngine, seeded: None
+) -> None:
+    async with tenant_session(app_engine, uuid.UUID(TENANT_A)) as session:
+        names = (await session.execute(sa.text("select name from tenants"))).scalars().all()
+    assert names == ["Alpha"]
 
-    assert tenants == ["Alpha"]
-    assert users == ["a@alpha.test"]
+
+@pytest.mark.parametrize("table", sorted(TENANT_TABLES))
+async def test_every_tenant_table_shows_only_its_own_rows(
+    app_engine: AsyncEngine, seeded: None, table: str
+) -> None:
+    async with tenant_session(app_engine, uuid.UUID(TENANT_A)) as session:
+        count = (
+            await session.execute(sa.text(f"select count(*) from {table}"))  # noqa: S608
+        ).scalar_one()
+    assert count == 1, f"{table}: expected one row for tenant A, found {count}"
 
 
 async def test_a_tenant_cannot_read_another_tenants_row(
     app_engine: AsyncEngine, seeded: None
 ) -> None:
-    async with app_engine.begin() as conn:
-        await conn.execute(sa.text("select set_config('app.tenant_id', :t, true)"), {"t": TENANT_A})
+    async with tenant_session(app_engine, uuid.UUID(TENANT_A)) as session:
         rows = (
-            (await conn.execute(sa.text("select email from users where id = :id"), {"id": USER_B}))
+            (
+                await session.execute(
+                    sa.text("select email from users where id = :id"), {"id": USER_B}
+                )
+            )
             .scalars()
             .all()
         )
@@ -157,23 +252,21 @@ async def test_a_tenant_cannot_read_another_tenants_row(
 async def test_a_tenant_cannot_update_or_delete_another_tenants_row(
     app_engine: AsyncEngine, seeded: None
 ) -> None:
-    async with app_engine.begin() as conn:
-        await conn.execute(sa.text("select set_config('app.tenant_id', :t, true)"), {"t": TENANT_A})
-        updated = await conn.execute(
+    async with tenant_session(app_engine, uuid.UUID(TENANT_A)) as session:
+        updated = await session.execute(
             sa.text("update users set name = 'hacked' where id = :id"), {"id": USER_B}
         )
-        deleted = await conn.execute(sa.text("delete from users where id = :id"), {"id": USER_B})
-    assert updated.rowcount == 0
-    assert deleted.rowcount == 0
+        deleted = await session.execute(sa.text("delete from users where id = :id"), {"id": USER_B})
+    assert rowcount(updated) == 0
+    assert rowcount(deleted) == 0
 
 
 async def test_a_tenant_cannot_insert_a_row_for_another_tenant(
     app_engine: AsyncEngine, seeded: None
 ) -> None:
-    async with app_engine.begin() as conn:
-        await conn.execute(sa.text("select set_config('app.tenant_id', :t, true)"), {"t": TENANT_A})
+    async with tenant_session(app_engine, uuid.UUID(TENANT_A)) as session:
         with pytest.raises(DBAPIError):
-            await conn.execute(
+            await session.execute(
                 sa.text(
                     "insert into users (id, tenant_id, email, name) "
                     "values (:id, :t, 'x@beta.test', 'X')"
@@ -182,18 +275,48 @@ async def test_a_tenant_cannot_insert_a_row_for_another_tenant(
             )
 
 
-async def test_the_tenant_table_has_no_delete_policy(owner_engine: AsyncEngine) -> None:
-    async with owner_engine.connect() as conn:
-        commands = (
-            (
-                await conn.execute(
-                    sa.text(
-                        "select cmd from pg_policies where schemaname = 'public' "
-                        "and tablename = 'tenants'"
-                    )
-                )
+async def test_a_membership_cannot_point_at_another_tenants_user(
+    app_engine: AsyncEngine, seeded: None
+) -> None:
+    """The foreign key carries the tenant, because RI checks bypass RLS."""
+    async with tenant_session(app_engine, uuid.UUID(TENANT_A)) as session:
+        with pytest.raises(DBAPIError):
+            await session.execute(
+                sa.text(
+                    "insert into memberships (id, tenant_id, user_id, role) "
+                    "values (:id, :t, :u, 'viewer')"
+                ),
+                {
+                    "id": "018f0000-0000-7000-8000-000000000097",
+                    "t": TENANT_A,
+                    "u": USER_B,
+                },
             )
-            .scalars()
-            .all()
+
+
+async def test_a_membership_can_still_point_at_a_user_of_its_own_tenant(
+    app_engine: AsyncEngine, seeded: None
+) -> None:
+    """Positive control: the composite key permits a legitimate membership."""
+    second_user = "018f0000-0000-7000-8000-000000000013"
+    async with tenant_session(app_engine, uuid.UUID(TENANT_A)) as session:
+        await session.execute(
+            sa.text(
+                "insert into users (id, tenant_id, email, name) "
+                "values (:id, :t, 'second@alpha.test', 'Second')"
+            ),
+            {"id": second_user, "t": TENANT_A},
         )
-    assert "DELETE" not in commands, "deleting a tenant cascades to all of its data"
+        await session.execute(
+            sa.text(
+                "insert into memberships (id, tenant_id, user_id, role) "
+                "values (:id, :t, :u, 'viewer')"
+            ),
+            {
+                "id": "018f0000-0000-7000-8000-000000000096",
+                "t": TENANT_A,
+                "u": second_user,
+            },
+        )
+        count = (await session.execute(sa.text("select count(*) from memberships"))).scalar_one()
+    assert count == 2
