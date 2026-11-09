@@ -1,12 +1,12 @@
 """Turn a guidance page into sections that follow its heading structure.
 
-Only the main content is read: GOV.UK wraps it in <main>, and everything outside
-it is navigation, cookie banners and footers. Text before the first heading inside
-the main content becomes an introduction rather than being dropped, because on
-real pages it is often the summary a reader needs.
+Two shapes matter. A rendered GOV.UK page has an h1 and wraps content in <main>.
+A Content API body is govspeak without an h1: the title is a separate field, and
+the body often opens with paragraphs before the first h2. So the title seeds the
+heading path, and text before the first heading becomes an introduction rather
+than being dropped.
 
-Headings are the structure that matters for citation, so a section is a heading
-plus the text beneath it, and it keeps the path that reached it.
+Tables matter for fire guidance, so cell and row boundaries are kept.
 """
 
 from __future__ import annotations
@@ -17,26 +17,34 @@ from firebrief.ingest.types import ParsedSection
 
 HEADING_TAGS = {"h1": 1, "h2": 2, "h3": 3, "h4": 4}
 SKIP_TAGS = {"script", "style", "nav", "footer", "header", "form", "noscript"}
-CELL_END_TAGS = {"td", "th"}
+BLOCK_TAGS = {"p", "li", "div", "tr", "dt", "dd", "h5", "h6", "table", "ul", "ol"}
+CELL_TAGS = {"td", "th"}
 INTRO_HEADING = "Introduction"
+
+CELL_SEPARATOR = " | "
+BLOCK_SEPARATOR = " "
 
 
 class EmptyDocument(Exception):
     """The page produced no sections, so there is nothing to cite."""
 
 
-def _clean(parts: list[str]) -> str:
-    return " ".join("".join(parts).split())
+def _tidy(text: str) -> str:
+    collapsed = " ".join(text.split())
+    while " | |" in collapsed:
+        collapsed = collapsed.replace(" | |", " |")
+    return collapsed.strip(" |")
 
 
 class _Extractor(HTMLParser):
     def __init__(self, title: str | None, require_main: bool) -> None:
         super().__init__(convert_charrefs=True)
         self.sections: list[ParsedSection] = []
-        self._title = title
         self._require_main = require_main
         self._main_depth = 0
-        self._path: list[tuple[int, str]] = []
+        # The title is the root of every heading path, so a content-API body that
+        # starts at h2 still cites as "Title > Section".
+        self._path: list[tuple[int, str]] = [(0, title)] if title else []
         self._body: list[str] = []
         self._heading_level = 0
         self._heading: list[str] = []
@@ -52,6 +60,8 @@ class _Extractor(HTMLParser):
             self._main_depth += 1
         elif tag in SKIP_TAGS:
             self._skip_depth += 1
+        elif tag == "br":
+            self._body.append(BLOCK_SEPARATOR)
         elif tag in HEADING_TAGS and self._capturing:
             self._flush()
             self._in_heading = True
@@ -64,15 +74,21 @@ class _Extractor(HTMLParser):
         elif tag in SKIP_TAGS:
             self._skip_depth = max(0, self._skip_depth - 1)
         elif tag in HEADING_TAGS and self._in_heading:
-            text = _clean(self._heading)
+            text = _tidy("".join(self._heading))
             if text:
-                while self._path and self._path[-1][0] >= self._heading_level:
-                    self._path.pop()
-                self._path.append((self._heading_level, text))
+                # A rendered page repeats the title as its h1; do not cite it twice.
+                if len(self._path) == 1 and self._path[0][0] == 0 and self._path[0][1] == text:
+                    self._path = [(self._heading_level, text)]
+                else:
+                    while self._path and self._path[-1][0] >= self._heading_level:
+                        self._path.pop()
+                    self._path.append((self._heading_level, text))
             self._in_heading = False
             self._heading = []
-        elif tag in CELL_END_TAGS:
-            self._body.append(" | ")
+        elif tag in CELL_TAGS:
+            self._body.append(CELL_SEPARATOR)
+        elif tag in BLOCK_TAGS:
+            self._body.append(BLOCK_SEPARATOR)
 
     def handle_data(self, data: str) -> None:
         if self._skip_depth or not self._capturing:
@@ -87,7 +103,7 @@ class _Extractor(HTMLParser):
         self._flush()
 
     def _flush(self) -> None:
-        body = _clean(self._body).replace(" | | ", " | ") if self._body else ""
+        body = _tidy("".join(self._body))
         self._body = []
         if not body:
             return
@@ -95,8 +111,8 @@ class _Extractor(HTMLParser):
             heading_path = " > ".join(text for _, text in self._path)
             heading = self._path[-1][1]
         else:
-            heading_path = self._title or INTRO_HEADING
-            heading = heading_path
+            heading_path = INTRO_HEADING
+            heading = INTRO_HEADING
         self.sections.append(ParsedSection(heading_path=heading_path, heading=heading, body=body))
 
 

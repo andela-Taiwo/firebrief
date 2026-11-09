@@ -115,3 +115,36 @@ from the reviewed list; re-ingest and assert no duplicate.
 | C14 | `GRANT INSERT ON documents TO firebrief_app` | privilege test names `ins` |
 | C15 | Content hash reverted to the raw bytes | furniture-change test fails |
 | C16 | Licence check weakened to `startswith("ogl")` | near-miss test: "DID NOT RAISE LicenceNotAccepted" |
+
+## Implementation review responses
+
+| Sev | Finding | Response |
+|---|---|---|
+| **H1** | The licence gate only ever saw the adapter's default | `corpus/sources.toml` is the reviewed manifest: licence, edition and effective date per slug. The adapter refuses unlisted slugs before any network call, and metadata comes from the manifest, not the page |
+| **H2** | Intro text lost; title missing from the path | The title seeds the heading path, so a govspeak body with no h1 still cites as "Title > Section", and pre-heading text becomes an introduction. Tested with a content-API-shaped fixture |
+| **H3** | Table cells ran together | Cell, row and block boundaries now emit separators; `Door type \| Rating` and `Flat entrance \| FD30S` are asserted |
+| **H4** | The adapter missed `details.parts[]` and PDFs | Parts are joined with their titles; PDFs are excluded by decision in ADR 0004, and an unlisted PDF-bearing document cannot be ingested at all |
+| **H5** | `effective_to` cannot be set on an immutable row | The column is gone. The current version is the latest `effective_from` at or before the date, with `fetched_at` breaking ties |
+| M | Version identity ignored the reviewed metadata | Licence and edition are part of the content hash, so a corrected edition is a new version rather than a silent no-op; tested |
+| M | Check-then-insert race | `insert ... on conflict do nothing returning` for documents and versions |
+| M | TRUNCATE bypassed the guard | `before truncate ... for each statement` triggers on all three tables. The test reset uses `session_replication_role = replica`, which is the owner bypass ADR 0003 records |
+| M | Runtime write test could depend on error ordering | It asserts `permission denied` explicitly |
+| L | Long headings would raise | `heading` and `heading_path` are `Text` |
+| L | `sections=0` for an existing version | Returns the stored section count |
+| L | Versions did not record their title | `document_versions.title` snapshots it, so an old citation keeps its name |
+| L | No User-Agent or retries | User-Agent added; retries deferred and noted in the code |
+
+### Canaries added by this round
+
+| # | Break | Caught by |
+|---|---|---|
+| C17 | Manifest returns a default for unlisted slugs | `test_an_unlisted_document_is_refused`: DID NOT RAISE |
+| C18 | Version identity ignores licence and edition | corrected-edition test fails |
+| C19 | `sections_no_truncate` dropped | truncate test: DID NOT RAISE |
+
+### Note on the migration
+
+`0006_corpus` was edited rather than superseded, because the branch is unmerged and the
+schema changed shape (title snapshot, no `effective_to`, `Text` headings, truncate
+guards). The local test database was rebuilt from an empty schema rather than patched,
+because the previous migration had already been applied here.

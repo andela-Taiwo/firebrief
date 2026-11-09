@@ -18,12 +18,20 @@ from firebrief.ingest.types import SourceDocument
 from tests.ingest.fixtures import FURNITURE_ONLY_HTML, GUIDANCE_HTML, REVISED_HTML, source
 
 CORPUS_TABLES = ("documents", "document_versions", "sections")
+SECTION_COUNT = 6
 
 
 @pytest.fixture(autouse=True)
 async def empty_corpus(owner_engine: AsyncEngine) -> None:
-    """TRUNCATE bypasses the append-only row triggers; each test starts clean."""
+    """Reset between tests.
+
+    TRUNCATE is itself guarded, so the owner disables triggers for this
+    transaction only. That is exactly the owner bypass ADR 0003 records.
+    """
     async with owner_engine.begin() as connection:
+        await connection.execute(
+            sa.text("select set_config('session_replication_role', 'replica', true)")
+        )
         await connection.execute(
             sa.text("truncate table sections, document_versions, documents cascade")
         )
@@ -46,10 +54,10 @@ async def test_ingesting_a_document_stores_versions_and_sections(
     result = await _ingest(owner_engine, source())
 
     assert result.created is True
-    assert result.sections == 6
+    assert result.sections == SECTION_COUNT
     assert await _count(owner_engine, "select count(*) from documents") == 1
     assert await _count(owner_engine, "select count(*) from document_versions") == 1
-    assert await _count(owner_engine, "select count(*) from sections") == 6
+    assert await _count(owner_engine, "select count(*) from sections") == SECTION_COUNT
 
 
 async def test_re_ingesting_the_same_bytes_changes_nothing(owner_engine: AsyncEngine) -> None:
@@ -58,6 +66,7 @@ async def test_re_ingesting_the_same_bytes_changes_nothing(owner_engine: AsyncEn
 
     assert second.created is False
     assert second.version_id == first.version_id
+    assert second.sections == SECTION_COUNT
     assert await _count(owner_engine, "select count(*) from document_versions") == 1
 
 
@@ -70,7 +79,16 @@ async def test_a_page_furniture_change_does_not_create_a_version(
 
     assert second.created is False
     assert second.version_id == first.version_id
-    assert await _count(owner_engine, "select count(*) from document_versions") == 1
+
+
+async def test_a_corrected_edition_is_a_new_version_not_a_silent_no_op(
+    owner_engine: AsyncEngine,
+) -> None:
+    first = await _ingest(owner_engine, source())
+    corrected = await _ingest(owner_engine, replace(source(), edition="2020"))
+
+    assert corrected.created is True
+    assert corrected.version_id != first.version_id
 
 
 async def test_changed_guidance_creates_a_new_version_and_keeps_the_old_one(
@@ -82,14 +100,14 @@ async def test_changed_guidance_creates_a_new_version_and_keeps_the_old_one(
     assert second.created is True
     assert second.version_id != first.version_id
     assert await _count(owner_engine, "select count(*) from document_versions") == 2
-    assert await _count(owner_engine, "select count(*) from sections") == 12
+    assert await _count(owner_engine, "select count(*) from sections") == 2 * SECTION_COUNT
     assert (
         await _count(
             owner_engine,
             "select count(*) from sections where version_id = :v",
             v=first.version_id,
         )
-        == 6
+        == SECTION_COUNT
     )
 
 
@@ -101,18 +119,17 @@ async def test_the_version_records_the_bytes_it_read(owner_engine: AsyncEngine) 
         row = (
             (
                 await connection.execute(
-                    sa.text("select source_sha256, content_hash from document_versions")
+                    sa.text("select source_sha256, content_hash, title from document_versions")
                 )
             )
             .mappings()
             .one()
         )
 
-    # Same guidance, different furniture: one version, holding the bytes it
-    # actually read (the first fetch) and a content hash that ignores furniture.
     assert await _count(owner_engine, "select count(*) from document_versions") == 1
     assert row["source_sha256"] == source_hash(FURNITURE_ONLY_HTML)
     assert row["content_hash"] != row["source_sha256"]
+    assert row["title"] == "Fire safety in purpose-built flats"
 
 
 async def test_a_version_cannot_be_updated_or_deleted(owner_engine: AsyncEngine) -> None:
@@ -136,6 +153,15 @@ async def test_a_section_cannot_be_updated_or_deleted(owner_engine: AsyncEngine)
                 await connection.execute(sa.text(statement))
 
 
+async def test_the_corpus_cannot_be_truncated(owner_engine: AsyncEngine) -> None:
+    await _ingest(owner_engine, source())
+
+    for statement in ("truncate table sections", "truncate table documents cascade"):
+        async with owner_engine.begin() as connection:
+            with pytest.raises(DBAPIError, match="cannot be truncated"):
+                await connection.execute(sa.text(statement))
+
+
 async def test_a_documents_title_may_change_but_it_cannot_be_deleted(
     owner_engine: AsyncEngine,
 ) -> None:
@@ -146,7 +172,7 @@ async def test_a_documents_title_may_change_but_it_cannot_be_deleted(
     assert await _count(owner_engine, "select count(*) from documents where title = 'Renamed'") == 1
 
     async with owner_engine.begin() as connection:
-        with pytest.raises(DBAPIError):
+        with pytest.raises(DBAPIError, match="append-only"):
             await connection.execute(sa.text("delete from documents"))
 
 
@@ -199,7 +225,7 @@ async def test_the_runtime_role_can_read_the_corpus(
 
     async with app_engine.connect() as connection:
         sections = (await connection.execute(sa.text("select count(*) from sections"))).scalar_one()
-    assert sections == 6
+    assert sections == SECTION_COUNT
 
 
 async def test_the_runtime_role_cannot_write_the_corpus(
@@ -222,6 +248,7 @@ def _version(edition: str, effective_from: date | None, fetched_at: datetime) ->
         document_id=uuid4(),
         content_hash=edition,
         source_sha256=edition,
+        title="Title",
         fetched_at=fetched_at,
         licence="ogl-3.0",
         edition=edition,

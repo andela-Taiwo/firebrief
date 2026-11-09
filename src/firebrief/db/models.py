@@ -117,7 +117,13 @@ class Document(TimestampsMixin, Base):
 
 
 class DocumentVersion(Base):
-    """One immutable snapshot of a document, identified by the hash of its bytes."""
+    """One immutable snapshot of a document.
+
+    Identity is the hash of the parsed sections plus the reviewed metadata
+    (licence and edition), so a corrected edition is a new version rather than a
+    silent no-op. The title is snapshotted here: a citation should say what the
+    document was called when it was read, not what it is called today.
+    """
 
     __tablename__ = "document_versions"
 
@@ -127,11 +133,11 @@ class DocumentVersion(Base):
     )
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     licence: Mapped[str] = mapped_column(String(50), nullable=False)
     edition: Mapped[str] = mapped_column(String(100), nullable=False)
     effective_from: Mapped[date | None] = mapped_column(Date, nullable=True)
-    effective_to: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -151,8 +157,8 @@ class Section(Base):
         UUID(as_uuid=True), ForeignKey("document_versions.id"), nullable=False, index=True
     )
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
-    heading_path: Mapped[str] = mapped_column(String(1000), nullable=False)
-    heading: Mapped[str] = mapped_column(String(500), nullable=False)
+    heading_path: Mapped[str] = mapped_column(Text, nullable=False)
+    heading: Mapped[str] = mapped_column(Text, nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

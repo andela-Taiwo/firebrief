@@ -2,6 +2,7 @@
 
 from firebrief.ingest.current import select_current
 from firebrief.ingest.licence import ALLOWED_LICENCES, LicenceNotAccepted, check_licence
+from firebrief.ingest.manifest import Manifest, SourceMeta, UnlistedDocument
 from firebrief.ingest.parse import EmptyDocument, parse_sections
 from firebrief.ingest.sources import FakeSource, GovUkContentApi
 from firebrief.ingest.store import IngestResult, content_hash, ingest, source_hash
@@ -15,8 +16,11 @@ __all__ = [
     "GovUkContentApi",
     "IngestResult",
     "LicenceNotAccepted",
+    "Manifest",
     "ParsedSection",
     "SourceDocument",
+    "SourceMeta",
+    "UnlistedDocument",
     "check_licence",
     "content_hash",
     "ingest",

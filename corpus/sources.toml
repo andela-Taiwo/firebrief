@@ -1,0 +1,20 @@
+# The reviewed corpus. Every document is listed deliberately, with the licence it
+# is published under and the edition it represents. Ingestion refuses any slug
+# that is not here: a document cannot enter the corpus because a fetcher felt
+# like it.
+#
+# effective_from is the date the edition came into force. A later edition is a
+# new entry in the same document's history; the current version is derived from
+# it, so nothing ever needs to be edited in place.
+
+[documents."fire-safety-purpose-built-flats"]
+title = "Fire safety in purpose-built flats"
+licence = "OGL-3.0"
+edition = "2019"
+effective_from = 2019-06-01
+
+[documents."fire-safety-risk-assessment-offices-shops"]
+title = "Fire safety risk assessment: offices and shops"
+licence = "OGL-3.0"
+edition = "2006"
+effective_from = 2006-06-01

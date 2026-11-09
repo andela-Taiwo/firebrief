@@ -19,7 +19,6 @@ class SourceDocument:
     edition: str
     fetched_at: datetime
     effective_from: date | None = None
-    effective_to: date | None = None
 
     def __post_init__(self) -> None:
         if not self.slug.strip():

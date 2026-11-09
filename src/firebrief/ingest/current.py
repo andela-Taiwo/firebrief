@@ -1,8 +1,9 @@
 """Which version should answer a question asked on a given date.
 
-The rule is explicit and testable: among versions in force on that date, the one
-with the latest `effective_from` wins, and `fetched_at` breaks the tie. A version
-with no `effective_from` is treated as always having been in force.
+There is no `effective_to`: you only learn that an edition has ended when its
+successor arrives, and versions are immutable. So the version in force on a date
+is the one with the latest `effective_from` at or before that date, with
+`fetched_at` breaking ties between corrections of the same edition.
 """
 
 from __future__ import annotations
@@ -17,8 +18,7 @@ def select_current(versions: Sequence[DocumentVersion], *, as_of: date) -> Docum
     eligible = [
         version
         for version in versions
-        if (version.effective_from is None or version.effective_from <= as_of)
-        and (version.effective_to is None or version.effective_to >= as_of)
+        if version.effective_from is None or version.effective_from <= as_of
     ]
     if not eligible:
         return None

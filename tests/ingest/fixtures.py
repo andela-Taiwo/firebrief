@@ -53,6 +53,14 @@ REVISED_HTML = GUIDANCE_HTML.replace(
     "and common parts kept clear.",
 )
 
+CONTENT_API_HTML = """
+<p>The summary sits before any heading.</p>
+<h2>Means of escape</h2>
+<p>Travel distances should be limited so residents can reach a place of safety.</p>
+<h2>Fire doors</h2>
+<p>Flat entrance doors should be self-closing.</p>
+"""
+
 INTRO_HTML = """
 <main>
 <p>This summary sits before any heading.</p>
