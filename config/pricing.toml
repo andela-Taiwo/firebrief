@@ -1,0 +1,24 @@
+[currency]
+code = "GBP"
+
+# Prices are the provider's published price per million tokens, in the billing
+# currency. Verify against the provider's pricing page before relying on them;
+# they are configuration, not constants.
+#
+# micros_per_mtok = price * 1_000_000, computed exactly at load time.
+
+[models."claude-sonnet-4-5-20250929"]
+input = 3.00
+output = 15.00
+
+[models."claude-haiku-4-5-20251001"]
+input = 1.00
+output = 5.00
+
+[models."gpt-5-2025-08-07"]
+input = 1.25
+output = 10.00
+
+[models."gpt-5-mini-2025-08-07"]
+input = 0.25
+output = 2.00
