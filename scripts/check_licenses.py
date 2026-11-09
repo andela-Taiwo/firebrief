@@ -28,6 +28,7 @@ ALLOWLIST: frozenset[str] = frozenset(
         "Apache-2.0",
         "Apache Software License",
         "Apache-2.0 OR BSD-2-Clause",
+        "MIT AND PSF-2.0",  # reviewed: greenlet, pulled in by SQLAlchemy
         "ISC",
         "PSF-2.0",
         "MPL-2.0",
