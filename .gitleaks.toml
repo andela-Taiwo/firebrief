@@ -1,0 +1,14 @@
+title = "firebrief"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated caches and virtualenvs; no secrets belong here anyway"
+paths = [
+  '''\.venv/''',
+  '''\.uv-cache/''',
+  '''\.hypothesis/''',
+  '''\.pytest_cache/''',
+  '''\.ruff_cache/''',
+]
