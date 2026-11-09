@@ -14,7 +14,7 @@ from tests.db.data import TENANT_A, TENANT_B, USER_B
 
 TENANT_TABLES = {"users", "memberships"}
 SELF_SCOPED_TABLES = {"tenants"}
-REVIEWED_GLOBAL_TABLES = {"alembic_version"}
+REVIEWED_GLOBAL_TABLES = {"alembic_version", "documents", "document_versions", "sections"}
 
 # One canonical expression, compared exactly after normalisation. Fragment
 # matching would accept "... OR true"; this cannot.
