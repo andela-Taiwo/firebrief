@@ -8,16 +8,19 @@ that is where they must be enforced.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 import uuid6
 from sqlalchemy import (
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Integer,
     MetaData,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -100,3 +103,65 @@ class Membership(TimestampsMixin, Base):
             name="fk_memberships_tenant_user",
         ),
     )
+
+
+class Document(TimestampsMixin, Base):
+    """A guidance document. Global, not tenant-owned: the corpus is shared."""
+
+    __tablename__ = "documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_id)
+    slug: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+
+
+class DocumentVersion(Base):
+    """One immutable snapshot of a document.
+
+    Identity is the hash of the parsed sections plus the reviewed metadata
+    (licence and edition), so a corrected edition is a new version rather than a
+    silent no-op. The title is snapshotted here: a citation should say what the
+    document was called when it was read, not what it is called today.
+    """
+
+    __tablename__ = "document_versions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_id)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False, index=True
+    )
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    licence: Mapped[str] = mapped_column(String(50), nullable=False)
+    edition: Mapped[str] = mapped_column(String(100), nullable=False)
+    effective_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("document_id", "content_hash", name="uq_document_versions_content"),
+    )
+
+
+class Section(Base):
+    """A section of one version. Append-only, like the version it belongs to."""
+
+    __tablename__ = "sections"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_id)
+    version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("document_versions.id"), nullable=False, index=True
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    heading_path: Mapped[str] = mapped_column(Text, nullable=False)
+    heading: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (UniqueConstraint("version_id", "ordinal", name="uq_sections_ordinal"),)
