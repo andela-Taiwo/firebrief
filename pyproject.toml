@@ -57,7 +57,7 @@ ignore = ["S101"]
 "tests/**" = ["S101", "S105", "S106", "S311", "PT011"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["firebrief"]
+known-first-party = ["firebrief", "tests"]
 
 [tool.pyright]
 include = ["src", "tests"]
