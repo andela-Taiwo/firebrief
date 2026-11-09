@@ -15,6 +15,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     MetaData,
     String,
     UniqueConstraint,
@@ -71,7 +72,13 @@ class User(TimestampsMixin, Base):
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
 
-    __table_args__ = (UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
+        # The target of the composite foreign key below. A plain foreign key
+        # from memberships would let one tenant point at another tenant's user:
+        # referential integrity checks run as the owner and bypass RLS.
+        UniqueConstraint("tenant_id", "id", name="uq_users_tenant_id_id"),
+    )
 
 
 class Membership(TimestampsMixin, Base):
@@ -81,12 +88,15 @@ class Membership(TimestampsMixin, Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
-    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
 
     __table_args__ = (
         CheckConstraint("role in ('owner', 'inspector', 'viewer')", name="role_allowed"),
         UniqueConstraint("tenant_id", "user_id", name="uq_memberships_tenant_user"),
+        ForeignKeyConstraint(
+            ["tenant_id", "user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_memberships_tenant_user",
+        ),
     )
