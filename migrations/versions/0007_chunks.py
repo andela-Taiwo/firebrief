@@ -1,7 +1,10 @@
 """chunks: embedded pieces of an immutable version
 
-Embeddings are stored as double precision arrays and searched exactly. ADR 0005
-records why pgvector is not used yet, and when to reconsider.
+A chunk records the section it came from and its character range inside that
+section, so a citation can be resolved to the exact text. The embedding model and
+the chunker configuration are part of the key.
+
+Embeddings are double precision arrays searched exactly (ADR 0005).
 
 Revision ID: 0007_chunks
 Revises: 0006_corpus
@@ -36,11 +39,16 @@ def upgrade() -> None:
         "chunks",
         sa.Column("id", sa.UUID(), nullable=False),
         sa.Column("version_id", sa.UUID(), nullable=False),
+        sa.Column("section_id", sa.UUID(), nullable=False),
         sa.Column("embedding_model", sa.String(length=100), nullable=False),
+        sa.Column("chunker", sa.String(length=100), nullable=False),
         sa.Column("ordinal", sa.Integer(), nullable=False),
         sa.Column("heading_path", sa.Text(), nullable=False),
         sa.Column("text", sa.Text(), nullable=False),
+        sa.Column("char_start", sa.Integer(), nullable=False),
+        sa.Column("char_end", sa.Integer(), nullable=False),
         sa.Column("token_estimate", sa.Integer(), nullable=False),
+        sa.Column("dimensions", sa.Integer(), nullable=False),
         sa.Column("embedding", postgresql.ARRAY(sa.Float()), nullable=False),
         sa.Column(
             "created_at",
@@ -53,15 +61,29 @@ def upgrade() -> None:
             ["document_versions.id"],
             name=op.f("fk_chunks_version_id_document_versions"),
         ),
+        sa.ForeignKeyConstraint(
+            ["section_id"], ["sections.id"], name=op.f("fk_chunks_section_id_sections")
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_chunks")),
         sa.UniqueConstraint(
-            "version_id", "embedding_model", "ordinal", name="uq_chunks_version_model_ordinal"
+            "version_id",
+            "embedding_model",
+            "chunker",
+            "ordinal",
+            name="uq_chunks_version_model_chunker_ordinal",
+        ),
+        sa.CheckConstraint("dimensions > 0", name=op.f("ck_chunks_chunk_dimensions_positive")),
+        sa.CheckConstraint(
+            "array_length(embedding, 1) = dimensions", name=op.f("ck_chunks_chunk_dimensions_match")
+        ),
+        sa.CheckConstraint(
+            "char_start >= 0 and char_end >= char_start",
+            name=op.f("ck_chunks_chunk_offsets_ordered"),
         ),
     )
     op.create_index(op.f("ix_chunks_version_id"), "chunks", ["version_id"], unique=False)
+    op.create_index(op.f("ix_chunks_section_id"), "chunks", ["section_id"], unique=False)
 
-    # Chunks are derived, but they are derived from an immutable version and a
-    # citation may point at one. Same guards as the rest of the corpus.
     for table in ("chunks",):
         op.execute(
             f"create trigger {table}_append_only before update or delete on {table} "
@@ -82,5 +104,6 @@ def downgrade() -> None:
     op.execute(f'revoke all on chunks from "{role}"')
     op.execute("drop trigger chunks_no_truncate on chunks")
     op.execute("drop trigger chunks_append_only on chunks")
+    op.drop_index(op.f("ix_chunks_section_id"), table_name="chunks")
     op.drop_index(op.f("ix_chunks_version_id"), table_name="chunks")
     op.drop_table("chunks")

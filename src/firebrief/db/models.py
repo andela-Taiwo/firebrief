@@ -169,10 +169,12 @@ class Section(Base):
 
 
 class Chunk(Base):
-    """A retrievable piece of one version, embedded by one model.
+    """A retrievable piece of one section of one version.
 
-    The model is part of the key, so re-embedding with a new model adds a second
-    set instead of destroying the first while retrieval still depends on it.
+    `section_id` and the character offsets are what make a citation resolvable:
+    `heading_path` alone is ambiguous when a document has two "Notes" sections.
+    The embedding model and the chunker configuration are both part of the key, so
+    a new model or a new budget adds a complete set rather than mixing ordinals.
     """
 
     __tablename__ = "chunks"
@@ -181,11 +183,18 @@ class Chunk(Base):
     version_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("document_versions.id"), nullable=False, index=True
     )
+    section_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sections.id"), nullable=False, index=True
+    )
     embedding_model: Mapped[str] = mapped_column(String(100), nullable=False)
+    chunker: Mapped[str] = mapped_column(String(100), nullable=False)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     heading_path: Mapped[str] = mapped_column(Text, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    char_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_end: Mapped[int] = mapped_column(Integer, nullable=False)
     token_estimate: Mapped[int] = mapped_column(Integer, nullable=False)
+    dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(ARRAY(Float), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -193,6 +202,13 @@ class Chunk(Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "version_id", "embedding_model", "ordinal", name="uq_chunks_version_model_ordinal"
+            "version_id",
+            "embedding_model",
+            "chunker",
+            "ordinal",
+            name="uq_chunks_version_model_chunker_ordinal",
         ),
+        CheckConstraint("dimensions > 0", name="chunk_dimensions_positive"),
+        CheckConstraint("array_length(embedding, 1) = dimensions", name="chunk_dimensions_match"),
+        CheckConstraint("char_start >= 0 and char_end >= char_start", name="chunk_offsets_ordered"),
     )
