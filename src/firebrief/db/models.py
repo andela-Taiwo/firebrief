@@ -125,7 +125,8 @@ class DocumentVersion(Base):
     document_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False, index=True
     )
-    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     licence: Mapped[str] = mapped_column(String(50), nullable=False)
     edition: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -135,7 +136,9 @@ class DocumentVersion(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    __table_args__ = (UniqueConstraint("document_id", "sha256", name="uq_document_versions_sha"),)
+    __table_args__ = (
+        UniqueConstraint("document_id", "content_hash", name="uq_document_versions_content"),
+    )
 
 
 class Section(Base):

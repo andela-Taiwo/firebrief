@@ -60,7 +60,8 @@ def upgrade() -> None:
         "document_versions",
         sa.Column("id", sa.UUID(), nullable=False),
         sa.Column("document_id", sa.UUID(), nullable=False),
-        sa.Column("sha256", sa.String(length=64), nullable=False),
+        sa.Column("content_hash", sa.String(length=64), nullable=False),
+        sa.Column("source_sha256", sa.String(length=64), nullable=False),
         sa.Column("fetched_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("licence", sa.String(length=50), nullable=False),
         sa.Column("edition", sa.String(length=100), nullable=False),
@@ -78,7 +79,7 @@ def upgrade() -> None:
             name=op.f("fk_document_versions_document_id_documents"),
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_document_versions")),
-        sa.UniqueConstraint("document_id", "sha256", name="uq_document_versions_sha"),
+        sa.UniqueConstraint("document_id", "content_hash", name="uq_document_versions_content"),
     )
     op.create_index(
         op.f("ix_document_versions_document_id"), "document_versions", ["document_id"], unique=False

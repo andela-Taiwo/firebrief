@@ -93,3 +93,25 @@ from the reviewed list; re-ingest and assert no duplicate.
 - **Unchanged bytes still refresh title and URL.** The version and sections are untouched, but
   `documents.title` and `documents.source_url` are updated, so a corrected title propagates
   without a new version. Worth revisiting if the title is ever used in a citation.
+
+## Review responses
+
+| Sev | Finding | Response |
+|---|---|---|
+| **H1** | Runtime write test could pass on a foreign-key error | The insert now selects a real `version_id` and asserts `permission denied`; `has_table_privilege` checks INSERT/UPDATE/DELETE/TRUNCATE on all three tables |
+| **H2** | Hashing raw bytes would churn on page furniture | Version identity is now the hash of the parsed sections; the raw bytes are kept as `source_sha256`. Test: a page differing only in cookie banner, script and nav creates no version |
+| **H3** | No rule for the current version | `select_current(versions, as_of)` in `firebrief/ingest/current.py`: latest `effective_from` in force on the date, `fetched_at` breaking ties. Tested for before/between/after and for a same-edition correction |
+| **H4** | Pre-heading text was silently dropped | Parsing is limited to `<main>`; text before the first heading becomes an Introduction section. Tested, along with a page that has no headings at all (one introduction) and an empty page (refused) |
+| M | Append-only only holds against the runtime role | Recorded in ADR 0003, with the dedicated ingest role as the follow-up |
+| M | `documents` not covered | Tested: the title may change, deletion is refused by the foreign key from versions |
+| M | Concurrent ingests | The document row is locked with `SELECT ... FOR UPDATE`, so a second worker sees the first's version; the unique constraint remains the backstop |
+| M | Licence check was a prefix match in the test | Tests now assert exact allowlist membership and include `ogl-3.0-extra` and `OGL` as near misses |
+| M | Parser coverage | Fixtures now include script, style, cookie banner and footer; table content in reading order; duplicate headings kept as separate sections |
+
+### Canaries added
+
+| # | Break | Caught by |
+|---|---|---|
+| C14 | `GRANT INSERT ON documents TO firebrief_app` | privilege test names `ins` |
+| C15 | Content hash reverted to the raw bytes | furniture-change test fails |
+| C16 | Licence check weakened to `startswith("ogl")` | near-miss test: "DID NOT RAISE LicenceNotAccepted" |
