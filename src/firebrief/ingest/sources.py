@@ -37,7 +37,8 @@ def html_from_payload(payload: dict[str, object]) -> str:
             title = part.get("title")
             part_body = part.get("body")
             if isinstance(title, str) and title.strip():
-                chunks.append(f"<h2>{escape(title)}</h2>")
+                # One level above the body headings, so "Title > Part > Subheading".
+                chunks.append(f"<h1>{escape(title)}</h1>")
             if isinstance(part_body, str) and part_body.strip():
                 chunks.append(part_body)
         if chunks:

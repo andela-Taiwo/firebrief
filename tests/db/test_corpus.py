@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from uuid import uuid4
@@ -270,3 +271,48 @@ def test_a_later_fetch_wins_when_the_edition_is_the_same() -> None:
     correction = _version("2019", date(2019, 6, 1), datetime(2026, 3, 1, tzinfo=UTC))
 
     assert select_current([first, correction], as_of=date(2023, 1, 1)) is correction
+
+
+async def test_a_corrected_effective_date_is_a_new_version(owner_engine: AsyncEngine) -> None:
+    first = await _ingest(owner_engine, source())
+    corrected = await _ingest(owner_engine, source(effective_from=date(2019, 7, 1)))
+
+    assert corrected.created is True
+    assert corrected.version_id != first.version_id
+
+
+async def test_a_no_op_ingest_does_not_touch_updated_at(owner_engine: AsyncEngine) -> None:
+    await _ingest(owner_engine, source())
+    async with owner_engine.connect() as connection:
+        before = (
+            await connection.execute(sa.text("select updated_at from documents"))
+        ).scalar_one()
+
+    await _ingest(owner_engine, source())
+
+    async with owner_engine.connect() as connection:
+        after = (await connection.execute(sa.text("select updated_at from documents"))).scalar_one()
+    assert after == before
+
+
+async def test_two_workers_ingesting_the_same_document_converge(
+    owner_engine: AsyncEngine,
+) -> None:
+    async def run() -> IngestResult:
+        async with AsyncSession(owner_engine) as session, session.begin():
+            return await ingest(session, source())
+
+    results = await asyncio.gather(run(), run())
+
+    assert sorted(result.created for result in results) == [False, True]
+    assert await _count(owner_engine, "select count(*) from document_versions") == 1
+    assert await _count(owner_engine, "select count(*) from sections") == SECTION_COUNT
+
+
+def test_a_version_without_an_effective_date_is_treated_as_the_earliest() -> None:
+    undated = _version("undated", None, datetime(2026, 1, 1, tzinfo=UTC))
+    dated = _version("2022", date(2022, 1, 1), datetime(2026, 2, 1, tzinfo=UTC))
+
+    assert select_current([undated], as_of=date(2023, 1, 1)) is undated
+    assert select_current([undated, dated], as_of=date(2023, 1, 1)) is dated
+    assert select_current([undated, dated], as_of=date(2020, 1, 1)) is undated

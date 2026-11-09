@@ -17,8 +17,9 @@ import json
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,12 +41,19 @@ def source_hash(html: str) -> str:
     return hashlib.sha256(html.encode("utf-8")).hexdigest()
 
 
-def content_hash(sections: Sequence[ParsedSection], *, licence: str, edition: str) -> str:
+def content_hash(
+    sections: Sequence[ParsedSection],
+    *,
+    licence: str,
+    edition: str,
+    effective_from: date | None,
+) -> str:
     """Identity of the guidance and the reviewed statement about it."""
     payload = json.dumps(
         {
             "licence": licence,
             "edition": edition,
+            "effective_from": effective_from.isoformat() if effective_from else None,
             "sections": [
                 [section.heading_path, section.heading, section.body] for section in sections
             ],
@@ -59,8 +67,19 @@ def content_hash(sections: Sequence[ParsedSection], *, licence: str, edition: st
 async def ingest(session: AsyncSession, document: SourceDocument) -> IngestResult:
     licence = check_licence(document.licence)
     sections = parse_sections(document.html, title=document.title)
-    content = content_hash(sections, licence=licence, edition=document.edition)
+    content = content_hash(
+        sections,
+        licence=licence,
+        edition=document.edition,
+        effective_from=document.effective_from,
+    )
     source = source_hash(document.html)
+
+    # Serialise ingestion per document. The on-conflict inserts are the backstop;
+    # this is what makes two workers converge instead of one losing a race.
+    await session.execute(
+        text("select pg_advisory_xact_lock(hashtext(:slug))"), {"slug": document.slug}
+    )
 
     stored_id = await session.scalar(
         insert(Document)
@@ -73,11 +92,19 @@ async def ingest(session: AsyncSession, document: SourceDocument) -> IngestResul
     if stored_id is None:
         raise RuntimeError(f"could not create or find the document {document.slug!r}")
 
-    await session.execute(
-        update(Document)
-        .where(Document.id == stored_id)
-        .values(title=document.title, source_url=document.source_url)
-    )
+    # Only write when something actually changed, so a no-op ingest leaves
+    # documents.updated_at alone.
+    current = (
+        await session.execute(
+            select(Document.title, Document.source_url).where(Document.id == stored_id)
+        )
+    ).one()
+    if current.title != document.title or current.source_url != document.source_url:
+        await session.execute(
+            update(Document)
+            .where(Document.id == stored_id)
+            .values(title=document.title, source_url=document.source_url)
+        )
 
     version_id = await session.scalar(
         insert(DocumentVersion)

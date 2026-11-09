@@ -11,6 +11,7 @@ Tables matter for fire guidance, so cell and row boundaries are kept.
 
 from __future__ import annotations
 
+import re
 from html.parser import HTMLParser
 
 from firebrief.ingest.types import ParsedSection
@@ -20,6 +21,7 @@ SKIP_TAGS = {"script", "style", "nav", "footer", "header", "form", "noscript"}
 BLOCK_TAGS = {"p", "li", "div", "tr", "dt", "dd", "h5", "h6", "table", "ul", "ol"}
 CELL_TAGS = {"td", "th"}
 INTRO_HEADING = "Introduction"
+MAIN_TAG = re.compile(r"<main[\s>]", re.IGNORECASE)
 
 CELL_SEPARATOR = " | "
 BLOCK_SEPARATOR = " "
@@ -118,7 +120,7 @@ class _Extractor(HTMLParser):
 
 def parse_sections(html: str, *, title: str | None = None) -> list[ParsedSection]:
     """Parse the main content into sections, in reading order."""
-    parser = _Extractor(title=title, require_main="<main" in html.lower())
+    parser = _Extractor(title=title, require_main=bool(MAIN_TAG.search(html)))
     parser.feed(html)
     parser.close()
     if not parser.sections:

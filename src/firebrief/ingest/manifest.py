@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from firebrief.ingest.licence import LicenceNotAccepted, check_licence
+
 
 class UnlistedDocument(Exception):
     """The slug is not in the reviewed manifest."""
@@ -37,15 +39,23 @@ class Manifest:
         entries: dict[str, SourceMeta] = {}
         for slug, raw in documents.items():
             try:
-                entries[slug] = SourceMeta(
-                    slug=slug,
-                    title=str(raw["title"]),
-                    licence=str(raw["licence"]),
-                    edition=str(raw["edition"]),
-                    effective_from=raw.get("effective_from"),
-                )
+                licence = str(raw["licence"])
+                effective_from = raw.get("effective_from")
             except KeyError as exc:
                 raise ValueError(f"{slug}: manifest entry is missing {exc.args[0]!r}") from exc
+            try:
+                check_licence(licence)
+            except LicenceNotAccepted as exc:
+                raise ValueError(f"{slug}: {exc}") from exc
+            if effective_from is not None and not isinstance(effective_from, date):
+                raise ValueError(f"{slug}: effective_from must be a date, got {effective_from!r}")
+            entries[slug] = SourceMeta(
+                slug=slug,
+                title=str(raw["title"]),
+                licence=licence,
+                edition=str(raw["edition"]),
+                effective_from=effective_from,
+            )
         if not entries:
             raise ValueError(f"{path}: the manifest lists no documents")
         return cls(entries)

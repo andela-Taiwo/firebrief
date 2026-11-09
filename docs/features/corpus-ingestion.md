@@ -148,3 +148,27 @@ from the reviewed list; re-ingest and assert no duplicate.
 schema changed shape (title snapshot, no `effective_to`, `Text` headings, truncate
 guards). The local test database was rebuilt from an empty schema rather than patched,
 because the previous migration had already been applied here.
+
+## Final review responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| **Must** | Part titles emitted as `<h2>`, so a part's own subheading popped the part off the path | Part titles are `<h1>`, one level above body headings. End-to-end test: `Document > Part one > Sub` |
+| Should | A corrected `effective_from` was a silent no-op | It is part of the content hash, with a test alongside the corrected-edition one |
+| Should | No-op ingests still wrote `documents` | The row is updated only when title or source URL changed; `updated_at` is asserted unchanged |
+| Should | Manifest not validated at load | `check_licence` runs per entry and a non-date `effective_from` is rejected, each with a test |
+| Should | No concurrency test | Two sessions with `asyncio.gather`: one `created=True`, one version, one set of sections. `pg_advisory_xact_lock` per slug makes it deterministic; on-conflict stays as the backstop |
+| Should | Title de-duplication was exact-match | Compared with `casefold()`, so a page that differs in case cannot produce `Title > Title` |
+| Minor | Manifest paths were working-directory relative and loaded at import | Resolved from `__file__` and loaded in a fixture |
+| Minor | Unlisted-slug test used a real client | `MockTransport` that fails the test on any request |
+| Minor | No test for `effective_from = None` | Treated as the earliest; tested against a dated version |
+| Minor | `require_main` matched `<main-menu>` | Matches `<main` followed by whitespace or `>` |
+| Minor | PDF decision record | ADR 0004 covers Approved Document B explicitly |
+
+### Canaries added
+
+| # | Break | Caught by |
+|---|---|---|
+| C20 | `effective_from` dropped from the content hash | corrected-date test fails |
+| C21 | `documents` updated unconditionally | `updated_at` test fails |
+| C22 | Manifest licence check removed | refused-licence manifest test: DID NOT RAISE |
