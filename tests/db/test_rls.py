@@ -264,16 +264,28 @@ async def test_a_tenant_cannot_read_another_tenants_row(
     assert rows == []
 
 
-async def test_a_tenant_cannot_update_or_delete_another_tenants_row(
-    app_engine: AsyncEngine, seeded: None
+MUTATIONS: dict[str, tuple[str, str]] = {
+    "users": (
+        "update users set name = 'hacked' where tenant_id = :t",
+        "delete from users where tenant_id = :t",
+    ),
+    "memberships": (
+        "update memberships set role = 'viewer' where tenant_id = :t",
+        "delete from memberships where tenant_id = :t",
+    ),
+}
+
+
+@pytest.mark.parametrize("table", sorted(TENANT_TABLES))
+async def test_a_tenant_cannot_update_or_delete_another_tenants_rows(
+    app_engine: AsyncEngine, seeded: None, table: str
 ) -> None:
+    update_sql, delete_sql = MUTATIONS[table]
     async with tenant_session(app_engine, uuid.UUID(TENANT_A)) as session:
-        updated = await session.execute(
-            sa.text("update users set name = 'hacked' where id = :id"), {"id": USER_B}
-        )
-        deleted = await session.execute(sa.text("delete from users where id = :id"), {"id": USER_B})
-    assert rowcount(updated) == 0
-    assert rowcount(deleted) == 0
+        updated = await session.execute(sa.text(update_sql), {"t": TENANT_B})
+        deleted = await session.execute(sa.text(delete_sql), {"t": TENANT_B})
+    assert rowcount(updated) == 0, f"{table}: a cross-tenant update touched rows"
+    assert rowcount(deleted) == 0, f"{table}: a cross-tenant delete touched rows"
 
 
 @pytest.mark.parametrize("table", sorted(TENANT_TABLES))
@@ -378,3 +390,31 @@ async def test_the_app_role_has_no_privileges_on_the_migration_table(
 
     granted = [name for name, value in row.items() if value]
     assert not granted, f"the runtime role has {granted} on alembic_version"
+
+
+async def test_views_use_security_invoker(owner_engine: AsyncEngine) -> None:
+    """A view runs with its owner's rights unless told otherwise, bypassing RLS.
+
+    No views exist yet. When the first one arrives it must be created with
+    `security_invoker = true`; materialised views have no such option and need a
+    separate review, because their contents are materialised as the refresher.
+    """
+    async with owner_engine.connect() as connection:
+        rows = (
+            await connection.execute(
+                sa.text(
+                    """
+                    select c.relname, c.reloptions
+                    from pg_class c
+                    join pg_namespace n on n.oid = c.relnamespace
+                    where n.nspname = 'public' and c.relkind = 'v'
+                    """
+                )
+            )
+        ).all()
+
+    for name, options in rows:
+        assert options is not None, f"{name}: view has no reloptions at all"
+        assert "security_invoker=true" in options, (
+            f"{name}: create the view with security_invoker = true"
+        )

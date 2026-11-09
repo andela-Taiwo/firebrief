@@ -179,3 +179,23 @@ harness, not by a migration. Deployments will need an equivalent grant step; it 
 `alembic_version` raised. It would have passed even with `UPDATE` granted, because `UPDATE`
 also needs `SELECT` on the referenced column, which was absent. The test now asks
 `has_table_privilege` for each of SELECT/INSERT/UPDATE/DELETE, so it fails for the right reason.
+
+## Re-review 2 responses
+
+| Sev | Finding | Response |
+|---|---|---|
+| S1 | Test roles are cluster-wide and could collide | Names carry a random suffix (`firebrief_bypass_<8 hex>`); the conftest docstring records that this needs CREATEROLE; teardown drops them. Verified: after a run, `pg_roles` holds only `firebrief` and `firebrief_app` |
+| S2 | `canary_owned` in `public` could trip the invariant test | The table lives in a per-run `canary_<8 hex>` schema, dropped with `DROP SCHEMA ... CASCADE` in teardown. Verified: no `canary%` schemas remain |
+| S3 | `data.py` docstring was stale | Updated to say tenants are inserted as the owner and the TRUNCATE is the other privileged statement |
+| N1 | Update/delete not parametrised over tenant tables | Now parametrised. **The previous round claimed this was done; it was not.** The patch did not match the file after formatting, and I reported it without checking. The memberships case is now covered and the suite has 66 tests, not 64 |
+| N2 | No rule for safe views | `test_views_use_security_invoker` requires `security_invoker=true` on any view; materialised views are called out as needing separate review because they have no such option |
+| N3 | Duplicated name-check helpers | One `_database_name` plus `_assert_is_test_database`, used synchronously and asynchronously |
+| N4 | Redundant `test_the_database_is_a_test_database` | Kept as executable documentation |
+| N5 | PR title/description | Suggested in the reply; `gh` is unauthenticated in this environment, so the PR itself is unchanged |
+
+### Process note
+
+N1 is the second time a claim of mine outran the evidence (the first was lint, where an
+untracked `tests/__init__.py` made a dirty working tree look green). The rule from here:
+a change is only reported when a command in the transcript shows it, and `make check` is
+run from a clean clone before a PR is called ready.

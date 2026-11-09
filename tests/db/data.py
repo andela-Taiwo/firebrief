@@ -3,9 +3,10 @@
 Two tenants, one user each, so a leak is visible as a row that should not be
 there rather than as an empty result.
 
-The rows are written through the *runtime* role, inside a tenant session, so the
-seed exercises the same policies a real write would. Only the TRUNCATE needs the
-owner, and it is the only privileged statement in the suite.
+Tenants are inserted as the owner, because creating a tenant is an onboarding
+action with no INSERT policy (migration 0005). Everything else is written through
+the runtime role, inside a tenant session, so the seed exercises the same policies
+a real write would. The TRUNCATE is the other privileged statement.
 """
 
 from __future__ import annotations

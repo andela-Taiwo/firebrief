@@ -1,3 +1,10 @@
+"""Database fixtures.
+
+Roles are cluster-wide in PostgreSQL, not per-database, so the role tests create
+roles with a unique suffix and drop them in teardown. That requires the owner
+role to have CREATEROLE (it is the container superuser in development and CI).
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -38,23 +45,18 @@ def _require_test_database(url: str) -> str:
     return url
 
 
-async def _ask_server(engine: AsyncEngine) -> str:
+async def _database_name(engine: AsyncEngine) -> str:
     async with engine.connect() as connection:
-        value = (await connection.execute(sa.text("select current_database()"))).scalar_one()
-    return str(value)
+        return str((await connection.execute(sa.text("select current_database()"))).scalar_one())
 
 
-def _assert_server_is_test_database(engine: AsyncEngine) -> str:
-    name = asyncio.run(_ask_server(engine))
+def _assert_is_test_database(name: str) -> None:
     if not name.endswith("_test"):
         raise RuntimeError(f"refusing to run against {name}: not a *_test database")
-    return name
 
 
-async def _check_engine(engine: AsyncEngine) -> None:
-    name = await _ask_server(engine)
-    if not name.endswith("_test"):
-        raise RuntimeError(f"refusing to run against {name}: not a *_test database")
+def _assert_server_is_test_database(engine: AsyncEngine) -> None:
+    _assert_is_test_database(asyncio.run(_database_name(engine)))
 
 
 @pytest.fixture(scope="session")
@@ -96,7 +98,7 @@ def migrated(owner_url: str) -> None:
 async def owner_engine(owner_url: str) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(owner_url, poolclass=sa.pool.NullPool)
     try:
-        await _check_engine(engine)
+        _assert_is_test_database(await _database_name(engine))
         yield engine
     finally:
         await engine.dispose()
@@ -106,7 +108,7 @@ async def owner_engine(owner_url: str) -> AsyncIterator[AsyncEngine]:
 async def app_engine(app_url: str) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(app_url, poolclass=sa.pool.NullPool)
     try:
-        await _check_engine(engine)
+        _assert_is_test_database(await _database_name(engine))
         yield engine
     finally:
         await engine.dispose()
