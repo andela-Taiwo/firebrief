@@ -21,11 +21,14 @@ async def _corpus(engine: AsyncEngine) -> None:
         await embed_version(session, stored.version_id, embedder)
 
 
-async def test_a_question_gets_a_verified_answer(owner_engine: AsyncEngine) -> None:
+async def test_a_question_gets_a_verified_answer(
+    owner_engine: AsyncEngine, app_engine: AsyncEngine
+) -> None:
+    """Answered as the runtime role: production never has the owner's grants."""
     await _corpus(owner_engine)
     provider = FakeProvider(text=f'The limit is thirty metres: "{DEAD_ENDS}" [1]')
 
-    async with AsyncSession(owner_engine) as session:
+    async with AsyncSession(app_engine) as session:
         result = await answer_question(
             session,
             "How long can a dead end be?",
@@ -40,13 +43,15 @@ async def test_a_question_gets_a_verified_answer(owner_engine: AsyncEngine) -> N
     assert result.verification.may_show
 
 
-async def test_a_question_with_a_fabricated_quote_is_refused(owner_engine: AsyncEngine) -> None:
+async def test_a_question_with_a_fabricated_quote_is_refused(
+    owner_engine: AsyncEngine, app_engine: AsyncEngine
+) -> None:
     await _corpus(owner_engine)
     provider = FakeProvider(
         text='The limit is ten metres: "Dead ends must be limited to ten metres." [1]'
     )
 
-    async with AsyncSession(owner_engine) as session:
+    async with AsyncSession(app_engine) as session:
         result = await answer_question(
             session,
             "How long can a dead end be?",
@@ -55,24 +60,51 @@ async def test_a_question_with_a_fabricated_quote_is_refused(owner_engine: Async
             judge=FixedJudge(),
         )
 
-    assert not result.answered
     assert result.refusal_reason is RefusalReason.UNVERIFIED
 
 
-async def test_a_question_the_corpus_cannot_answer_is_refused(owner_engine: AsyncEngine) -> None:
-    """Nothing retrieved means the model is not called at all."""
+async def test_an_unanswerable_question_is_refused(
+    owner_engine: AsyncEngine, app_engine: AsyncEngine
+) -> None:
+    """No floor on similarity, so the model is asked and its uncited answer is refused."""
     await _corpus(owner_engine)
-    provider = FakeProvider(text="anything")
+    provider = FakeProvider(text="anything at all")
 
-    async with AsyncSession(owner_engine) as session:
+    async with AsyncSession(app_engine) as session:
         result = await answer_question(
             session,
-            "zzzz",
+            "zzzz qqqq",
             embedder=BagOfWordsEmbedder(),
             provider=provider,
             judge=FixedJudge(),
         )
 
-    assert result.refusal_reason in {RefusalReason.NO_SOURCES, RefusalReason.UNVERIFIED}
-    if result.refusal_reason is RefusalReason.NO_SOURCES:
-        assert provider.calls == []
+    assert result.refusal_reason is RefusalReason.UNVERIFIED
+    assert provider.calls, "the model was consulted; the refusal came after it"
+
+
+async def test_two_questions_get_different_request_ids(
+    owner_engine: AsyncEngine, app_engine: AsyncEngine
+) -> None:
+    await _corpus(owner_engine)
+    provider = FakeProvider(text=f'The limit is thirty metres: "{DEAD_ENDS}" [1]')
+
+    async with AsyncSession(app_engine) as session:
+        first = await answer_question(
+            session,
+            "How long can a dead end be?",
+            embedder=BagOfWordsEmbedder(),
+            provider=provider,
+            judge=FixedJudge(),
+        )
+        second = await answer_question(
+            session,
+            "How long can a dead end be?",
+            embedder=BagOfWordsEmbedder(),
+            provider=provider,
+            judge=FixedJudge(),
+        )
+
+    assert first.request_id
+    assert second.request_id
+    assert first.request_id != second.request_id

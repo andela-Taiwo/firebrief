@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from firebrief.answer.types import Verification
+from firebrief.answer.types import Status, Verification
 from firebrief.retrieval.types import Retrieved
 
 
@@ -21,6 +21,7 @@ class RefusalReason(StrEnum):
     UNVERIFIED = "unverified"
     MODEL_UNAVAILABLE = "model_unavailable"
     BUDGET_EXHAUSTED = "budget_exhausted"
+    TRUNCATED = "truncated"
 
 
 MESSAGES: dict[RefusalReason, str] = {
@@ -37,9 +38,10 @@ MESSAGES: dict[RefusalReason, str] = {
     RefusalReason.MODEL_UNAVAILABLE: (
         "The answering service is unavailable right now. Nothing was charged for this."
     ),
-    RefusalReason.BUDGET_EXHAUSTED: (
-        "This question would exceed your usage limit. The limit resets at the time shown "
-        "in your account."
+    RefusalReason.BUDGET_EXHAUSTED: ("This question would exceed your usage limit."),
+    RefusalReason.TRUNCATED: (
+        "The answer was cut off before it finished, so it cannot be checked. "
+        "Try a narrower question."
     ),
 }
 
@@ -74,18 +76,19 @@ def build_refusal(
     reason: RefusalReason,
     evidence: tuple[Retrieved, ...],
     verification: Verification | None = None,
+    details: tuple[str, ...] = (),
 ) -> Refusal:
-    details: tuple[str, ...] = ()
+    collected = list(details)
     if verification is not None:
-        details = tuple(
-            f"claim {index}: {check.status.value}"
-            for index, claim in enumerate(verification.claims, start=1)
-            for check in claim.checks
-            if check.status.value != "verified"
-        )
+        for index, claim in enumerate(verification.claims, start=1):
+            for check in claim.checks:
+                if check.status is not Status.VERIFIED:
+                    marker = f", [{check.marker}]" if check.marker is not None else ""
+                    quote = f' — "{check.quote[:40]}"' if check.quote else ""
+                    collected.append(f"claim {index}{marker}: {check.status.value}{quote}")
     return Refusal(
         reason=reason,
         message=MESSAGES[reason],
         evidence=evidence,
-        details=details,
+        details=tuple(collected),
     )

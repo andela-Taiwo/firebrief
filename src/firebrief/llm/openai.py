@@ -68,6 +68,7 @@ class OpenAIProvider:
             model=str(data.get("model", request.model)),
             provider=self.name,
             latency_ms=int((time.perf_counter() - started) * 1000),
+            finish_reason=str(data["choices"][0].get("finish_reason") or "") or None,
         )
 
 

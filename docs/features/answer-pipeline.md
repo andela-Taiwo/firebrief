@@ -116,3 +116,49 @@ The five messages are written for a reader, not a log:
 |---|---|---|
 | C47 | Verification details dropped from the refusal | failing-checks test |
 | C48 | Audit payload includes the passage text | audit test asserts `text` is absent |
+
+## Review responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| **Must** | Reservation IDs collided for identical questions | A UUID per request, returned on `AnswerResult.request_id`. Two identical questions produce two reservations; tested, and the canary sets it back to `question[:64]` |
+| **Must** | Only an exact `INSUFFICIENT_EVIDENCE` was recognised | `is_insufficient` reads the first line, ignores case and surrounding quotes or punctuation, so `"INSUFFICIENT_EVIDENCE."` and an explanation on the next line both refuse correctly. Parametrised over five variants |
+| **Must** | Truncated answers were reported as unverified | `LLMResponse` carries the provider's finish reason; `max_tokens`/`length` refuse as `TRUNCATED`, with its own message |
+| **Must** | Tests missing | Added, and the assertions tightened below |
+| Should | Usage dropped on the unverified path | Every refusal after a call carries `usage`; tested |
+| Should | Default model hard-coded | **Deferred.** The model is a parameter with a documented default. Choosing it from configuration and checking at start-up that every configured model has a price belongs with deployment (F21), not here |
+| Should | Budget exceptions escaped | `reserve` failures refuse with `BUDGET_EXHAUSTED`; settle and release failures are logged and swallowed. Recorded in ADR 0007 |
+| Should | Budget refusal message was vague | The rejection's `reset_at` is now in `details` |
+| Should | Details compared strings | Details use the `Status` enum and include the marker and the quote, pinned by test |
+| Should | Prompt did not delimit untrusted text | Sources are `<source n="…" edition="…">` and the question is `<question>`, with an instruction to treat them as data |
+| Should | Tidy-ups | Single `strip()`, provider exceptions logged by type |
+| Look-ahead | Judge and query-embedding costs are unbudgeted | Recorded below as an explicit follow-up, not silently dropped |
+
+### Tests strengthened
+
+Exact settlement (`price.cost(10, 5)`), `spent == 0` after a failed call, an untouched ledger
+after a budget rejection, the exact detail string, a genuine quote rejected by the judge,
+the judge not called on no-sources or decline, prompt ordering with two sources, and the
+integration tests now run as the **runtime role** rather than the owner.
+
+### Recorded for the next PRs
+
+- **Judge cost.** Each answer makes one generation call plus one call per quote; the
+  judge's worst case must be reserved alongside generation, or budgets understate spend.
+- **Query embedding cost.** Still unbudgeted for the same reason: retrieval has no tenant.
+- **Partial answers.** Withholding everything for one bad claim is safe but may withhold
+  too often; compare one budget-aware regeneration against showing only verified claims.
+  Track withhold rate as an evaluation metric.
+- **Streaming.** Nothing is shown until verified, so stream stage progress, not tokens.
+- **Audit context.** Pass a request context (request ID, tenant, scope, per-stage timings)
+  through `answer_question` before the API is built.
+- **Context budget.** `limit=6` chunks is a count, not a token budget; cap total source
+  tokens in `build_prompt` before long documents arrive.
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C49 | Request ID falls back to the question text | two-questions test sees the same ID |
+| C50 | Decline detection requires an exact match | variants test refuses as unverified |
+| C51 | Truncation not checked | truncated test reports unverified |
