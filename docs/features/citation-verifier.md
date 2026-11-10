@@ -126,3 +126,24 @@ always accept.
 | C38 | Existence searched every source | wrong-source test verifies |
 | C39 | Judge exception propagates | `TimeoutError` escapes `verify_answer` |
 | C40 | Minimum quote length removed | trivial-quote test verifies |
+
+## Re-review responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| **Must** | Offsets pointed into the normalised string, so a ligature or superscript shifted the highlight | Tokens are found in the original text and normalised one at a time, so offsets are original offsets. Spans also include the trailing punctuation the quote ends with. Tested with `ﬁ` and `m²` before the passage: `source.text[start:end]` equals the quote |
+| **Must** | Curly-quoted multi-sentence passages were split mid-quote | Typography is translated before masking and splitting. Tested with `“First sentence. Second sentence.” [1]` |
+| **Must** | One parse test was a tautology | Exact assertions: `claims[1].text == "Two thing."`, `claims[1].quotes == ((1, DEAD_ENDS),)` |
+| Should | Abbreviation masking was case-sensitive and matched inside words | One word-bounded, case-insensitive regex; tested with a capitalised `E.g.` |
+| Should | `UNATTRIBUTED` was unreachable | Removed from the enum and the branch |
+| Should | Judge errors were swallowed silently | The error type is recorded on the check and logged with the chunk id; tested |
+| Should | Judge calls run sequentially | **Deferred.** Recorded here rather than half-implemented: concurrency needs a semaphore and, once the real judge lands, budget accounting, which belongs with the judge integration |
+| Note | Prompt must tell the model to quote in context, reserve quotes for evidence, and avoid elisions | Captured in the plan's decisions and for the answer-pipeline prompt |
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C41 | Tokens found in the normalised string | offsets test: slice no longer equals the quote |
+| C42 | Curly quotes not translated before splitting | multi-sentence curly-quote test |
+| C43 | Abbreviation masking removed | capitalised `E.g.` splits the claim |
