@@ -1,6 +1,7 @@
-# A retrieval evaluation set: question -> the heading path that should answer it.
-# Small on purpose, checked in, and grown as the corpus grows. The number it
-# produces is reported, not just asserted.
+# A retrieval evaluation set: question -> the heading that should answer it.
+# Small on purpose, checked in, and grown as the corpus grows. It is a smoke gate
+# for plumbing, not a quality claim: six questions and a bag-of-words embedder.
+# The real quality gate belongs to a live evaluation with the real corpus.
 
 [[queries]]
 question = "How long can a dead end be?"
@@ -11,16 +12,16 @@ question = "Do flat entrance doors need to be self-closing?"
 expected = "Fire doors"
 
 [[queries]]
-question = "Must fire door signs be visible?"
-expected = "Signage"
+question = "What standard covers detection systems?"
+expected = "Detection"
 
 [[queries]]
 question = "Doors that are fire resisting"
 expected = "Fire doors"
 
 [[queries]]
-question = "Signs that are obstructed"
-expected = "Signage"
+question = "BS 5839 maintenance"
+expected = "Detection"
 
 [[queries]]
 question = "Length of dead ends"

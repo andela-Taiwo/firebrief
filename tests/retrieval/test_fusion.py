@@ -30,3 +30,21 @@ def test_a_chunk_absent_from_both_sides_scores_nothing() -> None:
 
 def test_fusion_is_deterministic() -> None:
     assert fuse([A, B], [B, A]) == fuse([A, B], [B, A])
+
+
+def test_fusion_of_nothing_is_nothing() -> None:
+    assert fuse([], []) == {}
+
+
+def test_the_score_is_one_over_k_plus_rank() -> None:
+    assert fuse([A], [A], k=60) == {A: 2 / 61}
+    assert fuse([A], [], k=60) == {A: 1 / 61}
+
+
+def test_ties_are_broken_by_chunk_id() -> None:
+    from firebrief.retrieval.search import order
+
+    low, high = sorted([A, B], key=str)
+    scores = {high: 0.5, low: 0.5}
+
+    assert order(scores) == [low, high]

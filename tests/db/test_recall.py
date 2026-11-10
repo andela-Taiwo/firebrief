@@ -1,7 +1,8 @@
-"""Recall@k on the checked-in retrieval evaluation set.
+"""Recall@3 on the checked-in retrieval set.
 
-This is a quality gate, not a unit test: it says how often the right section is in
-the top three, and fails if that drops below the agreed floor.
+A smoke test for the plumbing: six questions, three sections, a bag-of-words
+embedder. It proves retrieval works end to end; it does not prove retrieval is
+*good*. The real quality gate runs against the real corpus with a real embedder.
 """
 
 from __future__ import annotations
@@ -9,39 +10,23 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from firebrief.ingest.embed import BagOfWordsEmbedder
 from firebrief.ingest.store import ingest
 from firebrief.ingest.store_embed import embed_version
 from firebrief.retrieval.search import search
+from tests.db.data import RETRIEVAL_HTML
 from tests.ingest.fixtures import source
 
 QUERIES = Path(__file__).resolve().parents[2] / "evals" / "retrieval" / "queries.toml"
 MIN_RECALL = 0.8
 
-CORPUS_HTML = """
-<main><h1>Fire safety in flats</h1>
-<h2>Fire doors</h2><p>Flat entrance doors must be self-closing and fire-resisting.</p>
-<h2>Signage</h2><p>Fire door signs must be visible and never obstructed.</p>
-<h2>Escape routes</h2><p>Dead ends must be limited in length to thirty metres.</p>
-</main>
-"""
-
 
 async def test_recall_at_three_meets_the_floor(owner_engine: AsyncEngine) -> None:
-    async with owner_engine.begin() as connection:
-        await connection.execute(
-            sa.text("select set_config('session_replication_role', 'replica', true)")
-        )
-        await connection.execute(
-            sa.text("truncate table chunks, sections, document_versions, documents cascade")
-        )
-
     embedder = BagOfWordsEmbedder()
     async with AsyncSession(owner_engine) as session, session.begin():
-        stored = await ingest(session, source(CORPUS_HTML))
+        stored = await ingest(session, source(RETRIEVAL_HTML))
     async with AsyncSession(owner_engine) as session, session.begin():
         await embed_version(session, stored.version_id, embedder)
 
@@ -53,7 +38,7 @@ async def test_recall_at_three_meets_the_floor(owner_engine: AsyncEngine) -> Non
         for case in cases:
             results = await search(session, case["question"], embedder, limit=3)
             paths = [result.heading_path for result in results]
-            if any(path.endswith(case["expected"]) for path in paths):
+            if any(path.split(" > ")[-1] == case["expected"] for path in paths):
                 hits += 1
             else:
                 misses.append(f"{case['question']} -> {paths}")

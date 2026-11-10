@@ -117,3 +117,19 @@ async def app_engine(app_url: str) -> AsyncIterator[AsyncEngine]:
 @pytest.fixture
 async def seeded(owner_engine: AsyncEngine, app_engine: AsyncEngine) -> None:
     await seed(owner_engine, app_engine)
+
+
+@pytest.fixture(autouse=True)
+async def empty_corpus(owner_engine: AsyncEngine) -> None:
+    """Reset the corpus between tests.
+
+    TRUNCATE is itself guarded, so the owner disables triggers for this
+    transaction only. That is the owner bypass ADR 0003 records.
+    """
+    async with owner_engine.begin() as connection:
+        await connection.execute(
+            sa.text("select set_config('session_replication_role', 'replica', true)")
+        )
+        await connection.execute(
+            sa.text("truncate table chunks, sections, document_versions, documents cascade")
+        )
