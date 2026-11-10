@@ -85,7 +85,7 @@ class BagOfWordsEmbedder:
     query, so retrieval tests can assert an ordering.
     """
 
-    model: str = "bow-256"
+    model: str = "bow-1024"
     dimensions: int = 1024
 
     def _bucket(self, token: str) -> int:

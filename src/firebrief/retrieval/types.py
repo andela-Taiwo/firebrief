@@ -16,3 +16,7 @@ class Retrieved:
     score: float
     vector_rank: int | None
     text_rank: int | None
+    embedding_model: str
+    document_title: str
+    edition: str
+    source_url: str
