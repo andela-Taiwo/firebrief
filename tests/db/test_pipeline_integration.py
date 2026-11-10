@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from firebrief.answer import FixedJudge, RefusalReason, answer_question
-from firebrief.ingest.embed import BagOfWordsEmbedder
+from firebrief.ingest.embed import BagOfWordsEmbedder, Embedder
 from firebrief.ingest.store import ingest
 from firebrief.ingest.store_embed import embed_version
 from firebrief.llm import FakeProvider
@@ -128,3 +130,47 @@ async def test_a_relevance_floor_returns_no_sources_without_calling_the_model(
 
     assert result.refusal_reason is RefusalReason.NO_SOURCES
     assert provider.calls == []
+
+
+class RecordingEmbedder:
+    """Records every string it is asked to embed, so a leak is visible."""
+
+    def __init__(self, inner: Embedder) -> None:
+        self.inner = inner
+        self.texts: list[str] = []
+
+    @property
+    def model(self) -> str:
+        return self.inner.model
+
+    @property
+    def dimensions(self) -> int:
+        return self.inner.dimensions
+
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        self.texts.extend(texts)
+        return await self.inner.embed(texts)
+
+
+async def test_personal_data_never_reaches_the_embedding_provider(
+    owner_engine: AsyncEngine, app_engine: AsyncEngine
+) -> None:
+    """The query embedding is a third-party call: it must see redacted text."""
+    await _corpus(owner_engine)
+    embedder = RecordingEmbedder(BagOfWordsEmbedder())
+    provider = FakeProvider(text=f'The limit is thirty metres: "{DEAD_ENDS}" [1]')
+    question = "I am ada@example.com, how long can a dead end be?"
+
+    async with AsyncSession(app_engine) as session:
+        result = await answer_question(
+            session,
+            question,
+            embedder=embedder,
+            provider=provider,
+            judge=FixedJudge(),
+        )
+
+    assert embedder.texts, "the query was embedded"
+    assert all("ada@example.com" not in text for text in embedder.texts)
+    assert any("[REDACTED:email]" in text for text in embedder.texts)
+    assert "ada@example.com" not in result.question
