@@ -202,7 +202,11 @@ async def revoke_user_sessions(
     user_id: uuid.UUID,
     now: datetime | None = None,
 ) -> int:
-    """Revoke every open session for a user: "log out everywhere" and offboarding."""
+    """Revoke every open session for a user: "log out everywhere" and offboarding.
+
+    This has no authorisation of its own: a caller must check that the actor is the user
+    themselves or an admin of the tenant before calling it. The API layer enforces that.
+    """
     moment = _now(now)
     async with tenant_session(engine, tenant_id) as session:
         revoked = await session.execute(

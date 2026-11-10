@@ -183,3 +183,25 @@ every open session for a user in one statement.
   to `api-hardening`.
 - **Purge** of expired links and sessions: the app role cannot delete them, so it needs a
   privileged job alongside the audit log's purge path.
+
+
+## Follow-up review responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| Should | `ended_reason` and `consumed_at` could disagree, and a reason could be rewritten | A check ties them (`(consumed_at is null) = (ended_reason is null)`) and a trigger makes the ending write-once: NULL may become a value, a value may never change. Both tested |
+| Should | Existing consumed rows had no reason | Backfilled as `unknown` — honest, rather than guessing `used`. `unknown` is an allowed value |
+| Should | The check constraint names differed between model and migration | Both now use the convention-generated names, `ck_auth_magic_links_ended_reason_allowed` and `ck_auth_magic_links_consumed_with_reason`. Autogenerate does not compare checks, so this was found by reading, not by the tooling |
+| Should | The email backfill could collide on trimmed addresses | The migration refuses with a clear exception if trimming would collide two rows, before changing anything |
+| Should | `revoke_user_sessions` has no authorisation | Its docstring says callers must check the actor is the user or an admin; enforcement belongs with the API |
+| Test | The revoke test used `>= 2` | Exact count (two logins plus the fixture's seeded session), and another user's session still resolves afterwards |
+| Test | Normalisation on update untested | Added |
+| Test | Unknown reason, reason without consumption, rewritten reason | All added |
+| Minor | `lower()` is now redundant | Kept deliberately as defence in depth: a direct SQL write that bypasses the trigger still cannot create a case-collision. Recorded here so it is a choice, not an oversight |
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C76 | Write-once trigger dropped | reason-rewrite test |
+| C77 | The consumed/reason tie dropped | reason-without-consumption test |

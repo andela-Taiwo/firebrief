@@ -236,7 +236,12 @@ class AuthMagicLink(Base):
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "token_hash", name="uq_auth_links_tenant_hash"),
-        CheckConstraint("ended_reason in ('used', 'superseded')", name="ended_reason_allowed"),
+        CheckConstraint(
+            "ended_reason in ('used', 'superseded', 'unknown')", name="ended_reason_allowed"
+        ),
+        CheckConstraint(
+            "(consumed_at is null) = (ended_reason is null)", name="consumed_with_reason"
+        ),
         # The user must belong to the same tenant: RLS does not apply to RI checks.
         ForeignKeyConstraint(
             ["tenant_id", "user_id"],

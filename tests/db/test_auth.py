@@ -316,10 +316,67 @@ async def test_every_session_for_a_user_can_be_revoked(seeded, app_engine) -> No
         login = await login_with_magic_link(app_engine, sender.sent[-1][1], now=NOW)
         tokens.append(login.session_token)
 
+    other = RecordingEmailSender()
+    await request_magic_link(
+        app_engine,
+        tenant_id=uuid.UUID(TENANT_B),
+        email="b@beta.test",
+        sender=other,
+        now=NOW,
+    )
+    other_session = await login_with_magic_link(app_engine, other.sent[0][1], now=NOW)
+
     revoked = await revoke_user_sessions(
         app_engine, tenant_id=uuid.UUID(TENANT_A), user_id=uuid.UUID(USER_A), now=NOW
     )
 
-    assert revoked >= 2
+    # Two logins plus the session the fixture seeded for this user.
+    assert revoked == 3
     for token in tokens:
         assert await resolve_session(app_engine, token, now=NOW) is None
+    assert await resolve_session(app_engine, other_session.session_token, now=NOW) is not None
+
+
+async def test_an_email_is_normalised_on_update(seeded, owner_engine) -> None:
+    async with owner_engine.begin() as connection:
+        await connection.execute(
+            sa.text("update users set email = ' X@Beta.Test ' where tenant_id = :t"),
+            {"t": TENANT_B},
+        )
+        stored = (
+            await connection.execute(
+                sa.text("select email from users where tenant_id = :t"), {"t": TENANT_B}
+            )
+        ).scalar_one()
+
+    assert stored == "x@beta.test"
+
+
+async def test_an_unknown_ending_reason_is_refused(seeded, owner_engine) -> None:
+    with pytest.raises(DBAPIError, match="ck_auth_magic_links_ended_reason_allowed"):
+        async with owner_engine.begin() as connection:
+            await connection.execute(
+                sa.text("update auth_magic_links set consumed_at = now(), ended_reason = 'expired'")
+            )
+
+
+async def test_a_reason_cannot_be_set_without_consuming_the_link(seeded, owner_engine) -> None:
+    with pytest.raises(DBAPIError, match="ck_auth_magic_links_consumed_with_reason"):
+        async with owner_engine.begin() as connection:
+            await connection.execute(sa.text("update auth_magic_links set ended_reason = 'used'"))
+
+
+async def test_an_ending_is_write_once(seeded, app_engine, owner_engine) -> None:
+    sender = RecordingEmailSender()
+    await _request(app_engine, sender)
+    token = sender.sent[0][1]
+    await login_with_magic_link(app_engine, token, now=NOW)
+
+    with pytest.raises(DBAPIError, match="write-once"):
+        async with owner_engine.begin() as connection:
+            await connection.execute(
+                sa.text(
+                    "update auth_magic_links set ended_reason = 'superseded' where token_hash = :h"
+                ),
+                {"h": hash_token(token)},
+            )

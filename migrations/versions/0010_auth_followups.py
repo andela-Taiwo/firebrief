@@ -2,10 +2,13 @@
 
 Three deferred decisions from the auth reviews, done before the audit log depends on them:
 
-- `ended_reason` distinguishes a link that was used from one that was superseded, which the
-  audit log needs and `consumed_at` alone cannot express.
+- `ended_reason` distinguishes a link that was used from one that was superseded, which
+  `consumed_at` alone cannot express. It is tied to `consumed_at` by a check and made
+  write-once by a trigger, so the two cannot drift apart and a reason cannot be rewritten.
 - Emails are normalised by the database on write, so onboarding cannot store a mixed-case
-  address that bypasses the `lower(email)` index.
+  address that bypasses the `lower(email)` index. The backfill refuses to run if
+  normalisation would collide two addresses; on a fresh database it does nothing. It does
+  touch `updated_at` on every user row, unavoidably.
 - The case-sensitive unique constraint is dropped now that the index covers it.
 
 Revision ID: 0010_auth_followups
@@ -36,6 +39,27 @@ def _role() -> str:
 
 
 def upgrade() -> None:
+    # Emails are unique on lower(email) but not on the trimmed form, so trimming could
+    # collide two rows. Refuse loudly rather than half-migrating.
+    op.execute(
+        """
+        do $$
+        declare collisions int;
+        begin
+            select count(*) into collisions from (
+                select tenant_id, lower(btrim(email))
+                from users
+                group by 1, 2
+                having count(*) > 1
+            ) duplicate;
+            if collisions > 0 then
+                raise exception
+                    'cannot normalise emails: % address(es) collide after trimming', collisions;
+            end if;
+        end;
+        $$
+        """
+    )
     op.execute("update users set email = lower(btrim(email))")
     op.execute(
         """
@@ -57,9 +81,32 @@ def upgrade() -> None:
     op.add_column(
         "auth_magic_links", sa.Column("ended_reason", sa.String(length=20), nullable=True)
     )
+    # Rows consumed before this migration cannot be attributed; say so rather than guess.
+    op.execute("update auth_magic_links set ended_reason = 'unknown' where consumed_at is not null")
     op.execute(
-        "alter table auth_magic_links add constraint ck_auth_magic_links_ended_reason "
-        "check (ended_reason in ('used', 'superseded'))"
+        "alter table auth_magic_links add constraint ck_auth_magic_links_ended_reason_allowed "
+        "check (ended_reason in ('used', 'superseded', 'unknown'))"
+    )
+    op.execute(
+        "alter table auth_magic_links add constraint ck_auth_magic_links_consumed_with_reason "
+        "check ((consumed_at is null) = (ended_reason is null))"
+    )
+    op.execute(
+        """
+        create function forbid_reason_change() returns trigger
+        language plpgsql as $$
+        begin
+            if old.consumed_at is not null or old.ended_reason is not null then
+                raise exception 'a magic link ending is write-once';
+            end if;
+            return new;
+        end;
+        $$
+        """
+    )
+    op.execute(
+        "create trigger auth_magic_links_ended_once before update on auth_magic_links "
+        "for each row execute function forbid_reason_change()"
     )
 
     role = _role()
@@ -69,7 +116,14 @@ def upgrade() -> None:
 def downgrade() -> None:
     role = _role()
     op.execute(f'revoke update (ended_reason) on auth_magic_links from "{role}"')
-    op.execute("alter table auth_magic_links drop constraint ck_auth_magic_links_ended_reason")
+    op.execute("drop trigger auth_magic_links_ended_once on auth_magic_links")
+    op.execute("drop function forbid_reason_change()")
+    op.execute(
+        "alter table auth_magic_links drop constraint ck_auth_magic_links_consumed_with_reason"
+    )
+    op.execute(
+        "alter table auth_magic_links drop constraint ck_auth_magic_links_ended_reason_allowed"
+    )
     op.drop_column("auth_magic_links", "ended_reason")
 
     op.execute("alter table users add constraint uq_users_tenant_email unique (tenant_id, email)")
