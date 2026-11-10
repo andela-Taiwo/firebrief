@@ -18,6 +18,7 @@ class FakeProvider:
     text: str = "A scripted answer."
     usage: Usage = field(default_factory=lambda: Usage(10, 5))
     model: str = "fake-1"
+    finish_reason: str | None = "stop"
     failures: tuple[LLMError | None, ...] = ()
     calls: list[LLMRequest] = field(default_factory=list)
 
@@ -33,4 +34,5 @@ class FakeProvider:
             model=self.model,
             provider=self.name,
             latency_ms=0,
+            finish_reason=self.finish_reason,
         )

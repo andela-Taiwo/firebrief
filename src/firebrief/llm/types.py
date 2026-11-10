@@ -58,3 +58,5 @@ class LLMResponse:
     model: str
     provider: str
     latency_ms: int = 0
+    finish_reason: str | None = None
+    """Why the provider stopped, when it says: `max_tokens` means truncated."""
