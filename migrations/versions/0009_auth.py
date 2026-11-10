@@ -58,7 +58,9 @@ def upgrade() -> None:
             ["tenant_id"], ["tenants.id"], name=op.f("fk_auth_magic_links_tenant_id_tenants")
         ),
         sa.ForeignKeyConstraint(
-            ["user_id"], ["users.id"], name=op.f("fk_auth_magic_links_user_id_users")
+            ["tenant_id", "user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_auth_links_tenant_user",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_auth_magic_links")),
         sa.UniqueConstraint("tenant_id", "token_hash", name="uq_auth_links_tenant_hash"),
@@ -77,7 +79,9 @@ def upgrade() -> None:
             ["tenant_id"], ["tenants.id"], name=op.f("fk_auth_sessions_tenant_id_tenants")
         ),
         sa.ForeignKeyConstraint(
-            ["user_id"], ["users.id"], name=op.f("fk_auth_sessions_user_id_users")
+            ["tenant_id", "user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_auth_sessions_tenant_user",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_auth_sessions")),
         sa.UniqueConstraint("tenant_id", "token_hash", name="uq_auth_sessions_tenant_hash"),
@@ -92,17 +96,22 @@ def upgrade() -> None:
             f"using ({PREDICATE}) with check ({PREDICATE})"
         )
 
+    # Email is matched case-insensitively, so the uniqueness has to be too.
+    op.execute("create unique index uq_users_tenant_email_lower on users (tenant_id, lower(email))")
+
     role = _role()
-    for table, privileges in (
-        ("auth_magic_links", "select, insert, update"),
-        ("auth_sessions", "select, insert, update"),
-    ):
+    for table in TABLES:
         op.execute(f'revoke all on {table} from "{role}"')
-        op.execute(f'grant {privileges} on {table} to "{role}"')
+        op.execute(f'grant select, insert on {table} to "{role}"')
+    # The runtime role may only move the one column the flow owns, so it cannot
+    # extend an expiry, change a user, or un-consume a link.
+    op.execute(f'grant update (consumed_at) on auth_magic_links to "{role}"')
+    op.execute(f'grant update (revoked_at) on auth_sessions to "{role}"')
 
 
 def downgrade() -> None:
     role = _role()
+    op.execute("drop index uq_users_tenant_email_lower")
     for table in TABLES:
         op.execute(f'revoke all on {table} from "{role}"')
         op.execute(f"drop policy tenant_isolation on {table}")

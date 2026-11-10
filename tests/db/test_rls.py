@@ -243,11 +243,7 @@ async def test_a_tenant_sees_only_its_own_tenants_row(
     assert names == ["Alpha"]
 
 
-# Only the tables the fixture seeds: the auth tables are empty until someone logs in.
-SEEDED_TABLES = {"users", "memberships"}
-
-
-@pytest.mark.parametrize("table", sorted(SEEDED_TABLES))
+@pytest.mark.parametrize("table", sorted(TENANT_TABLES))
 async def test_every_tenant_table_shows_only_its_own_rows(
     app_engine: AsyncEngine, seeded: None, table: str
 ) -> None:
@@ -274,7 +270,9 @@ async def test_a_tenant_cannot_read_another_tenants_row(
     assert rows == []
 
 
-MUTATIONS: dict[str, tuple[str, str]] = {
+# table -> (update, delete). A delete of None means the grant forbids it, which is
+# asserted separately.
+MUTATIONS: dict[str, tuple[str, str | None]] = {
     "users": (
         "update users set name = 'hacked' where tenant_id = :t",
         "delete from users where tenant_id = :t",
@@ -283,11 +281,17 @@ MUTATIONS: dict[str, tuple[str, str]] = {
         "update memberships set role = 'viewer' where tenant_id = :t",
         "delete from memberships where tenant_id = :t",
     ),
+    "auth_magic_links": (
+        "update auth_magic_links set consumed_at = now() where tenant_id = :t",
+        None,
+    ),
+    "auth_sessions": (
+        "update auth_sessions set revoked_at = now() where tenant_id = :t",
+        None,
+    ),
 }
 
 
-# The auth tables are delete-denied at the grant level, so their mutation behaviour is
-# asserted in tests/db/test_auth.py rather than here.
 @pytest.mark.parametrize("table", sorted(MUTATIONS))
 async def test_a_tenant_cannot_update_or_delete_another_tenants_rows(
     app_engine: AsyncEngine, seeded: None, table: str
@@ -295,15 +299,17 @@ async def test_a_tenant_cannot_update_or_delete_another_tenants_rows(
     update_sql, delete_sql = MUTATIONS[table]
     async with tenant_session(app_engine, uuid.UUID(TENANT_A)) as session:
         updated = await session.execute(sa.text(update_sql), {"t": TENANT_B})
-        deleted = await session.execute(sa.text(delete_sql), {"t": TENANT_B})
+        deleted = (
+            await session.execute(sa.text(delete_sql), {"t": TENANT_B})
+            if delete_sql is not None
+            else None
+        )
     assert rowcount(updated) == 0, f"{table}: a cross-tenant update touched rows"
-    assert rowcount(deleted) == 0, f"{table}: a cross-tenant delete touched rows"
+    if deleted is not None:
+        assert rowcount(deleted) == 0, f"{table}: a cross-tenant delete touched rows"
 
 
-INSERT_TABLES = {"users", "memberships"}
-
-
-@pytest.mark.parametrize("table", sorted(INSERT_TABLES))
+@pytest.mark.parametrize("table", sorted(TENANT_TABLES))
 async def test_a_tenant_cannot_insert_a_row_for_another_tenant(
     app_engine: AsyncEngine, seeded: None, table: str
 ) -> None:
@@ -314,13 +320,35 @@ async def test_a_tenant_cannot_insert_a_row_for_another_tenant(
                 "values (:id, :t, 'x@beta.test', 'X')"
             )
             params: dict[str, str] = {"id": "018f0000-0000-7000-8000-000000000098", "t": TENANT_B}
-        else:
+        elif table == "memberships":
             statement = sa.text(
                 "insert into memberships (id, tenant_id, user_id, role) "
                 "values (:id, :t, :u, 'viewer')"
             )
             params = {
                 "id": "018f0000-0000-7000-8000-000000000094",
+                "t": TENANT_B,
+                "u": USER_B,
+            }
+        elif table == "auth_magic_links":
+            statement = sa.text(
+                "insert into auth_magic_links "
+                "(id, tenant_id, user_id, token_hash, expires_at) "
+                "values (:id, :t, :u, 'x', now() + interval '5 minutes')"
+            )
+            params = {
+                "id": "018f0000-0000-7000-8000-000000000092",
+                "t": TENANT_B,
+                "u": USER_B,
+            }
+        else:
+            statement = sa.text(
+                "insert into auth_sessions "
+                "(id, tenant_id, user_id, token_hash, expires_at) "
+                "values (:id, :t, :u, 'x', now() + interval '5 hours')"
+            )
+            params = {
+                "id": "018f0000-0000-7000-8000-000000000093",
                 "t": TENANT_B,
                 "u": USER_B,
             }

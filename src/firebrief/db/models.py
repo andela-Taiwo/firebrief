@@ -18,12 +18,14 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     MetaData,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -78,6 +80,7 @@ class User(TimestampsMixin, Base):
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
+        Index("uq_users_tenant_email_lower", "tenant_id", func.lower(text("email")), unique=True),
         # The target of the composite foreign key below. A plain foreign key
         # from memberships would let one tenant point at another tenant's user:
         # referential integrity checks run as the owner and bypass RLS.
@@ -223,9 +226,7 @@ class AuthMagicLink(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
-    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -235,6 +236,12 @@ class AuthMagicLink(Base):
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "token_hash", name="uq_auth_links_tenant_hash"),
+        # The user must belong to the same tenant: RLS does not apply to RI checks.
+        ForeignKeyConstraint(
+            ["tenant_id", "user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_auth_links_tenant_user",
+        ),
     )
 
 
@@ -247,9 +254,7 @@ class AuthSession(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
-    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -259,4 +264,9 @@ class AuthSession(Base):
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "token_hash", name="uq_auth_sessions_tenant_hash"),
+        ForeignKeyConstraint(
+            ["tenant_id", "user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_auth_sessions_tenant_user",
+        ),
     )

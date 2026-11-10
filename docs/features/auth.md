@@ -96,3 +96,46 @@ check.
 | C67 | The token is stored in clear instead of its hash | hash-in-database test |
 | C68 | The single-use condition is dropped from the claim | double-use test |
 | C69 | The expiry condition is dropped from the claim | expired-link test |
+
+## Review responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| **Must** | Cross-tenant foreign keys were back | Both auth tables now use `(tenant_id, user_id) → users(tenant_id, id)`. A test inserts a tenant-A session for a tenant-B user and the database refuses it |
+| **Must** | The isolation suite had shrunk around the new tables | The fixture seeds one link and one session per tenant; the visibility, update and insert tests cover all four tenant tables again. Delete stays covered by the grant test |
+| **Must** | Email matching was case-sensitive | Addresses are normalised on write and matched with `lower(email)`, enforced by a unique index on `(tenant_id, lower(email))`. A mixed-case login works; a second user differing only by case is refused |
+| **Must** | Email scanners would consume links on GET | Recorded in the contract below: `login_with_magic_link` must only be called from a POST, after a confirmation page |
+| Should | The app role could update any column | Column grants: `update (consumed_at)` and `update (revoked_at)` only. Extending an expiry is refused, tested |
+| Should | Old links stayed valid | Consuming one link invalidates the user's other open links, and at most three are kept open |
+| Should | Bad tokens were handled inconsistently | `resolve_session` catches only `InvalidToken`; revoking a malformed token is a no-op rather than a 500 |
+| Should | `NullEmailSender` failed silently | It logs a warning on every swallowed send |
+| Minor | Vacuous assertions | Replaced with an assertion that the stored hash does not contain the secret |
+| Minor | Inline `asyncio` import | Moved to the top |
+| Minor | Non-member message leaked more | The generic message is used for both cases |
+
+### Contract for the API layer
+
+`login_with_magic_link` consumes the link. It must be called from a **POST** that follows a
+confirmation page, never from the GET that an email scanner will fetch. Everything else
+about token handling — clearing the URL, the `HttpOnly` cookie, CSRF on cookie-authenticated
+POSTs, keeping tokens out of logs — is `api-hardening`'s job and is recorded there.
+
+### Carried forward
+
+- **Email-first login** needs one narrow privileged lookup (email → tenant ids), for example
+  a `security definer` function returning only tenant ids for an exact normalised address.
+  It is the one place auth would have to look across tenants, so it deserves its own review.
+- **Timing** differs between a known and unknown address. Queue the send so the endpoint
+  takes one path, and rate-limit per address and per IP.
+- **Retention**: expired links and sessions accumulate and the app role cannot delete them.
+  A privileged purge job belongs with the audit log's purge path.
+- **Revoke all sessions** for a user, needed by "log out everywhere" and offboarding.
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C70 | Composite key replaced with a plain user key | cross-tenant row test |
+| C71 | Lookup case-sensitive | mixed-case login |
+| C72 | Other links not invalidated | stale-link test |
+| C73 | Table-wide update grant | expiry-extension test |

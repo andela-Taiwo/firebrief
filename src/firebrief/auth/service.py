@@ -11,16 +11,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from firebrief.auth.email import EmailSender
-from firebrief.auth.tokens import hash_token, new_token, tenant_from_token
+from firebrief.auth.tokens import InvalidToken, hash_token, new_token, tenant_from_token
 from firebrief.db.models import AuthMagicLink, AuthSession, Membership, User
 from firebrief.db.session import tenant_session
 
 MAGIC_LINK_TTL = timedelta(minutes=15)
+MAX_OPEN_LINKS = 3
 SESSION_TTL = timedelta(hours=12)
 
 
@@ -49,6 +50,11 @@ def _now(now: datetime | None) -> datetime:
     return now or datetime.now(UTC)
 
 
+def normalise_email(email: str) -> str:
+    """Addresses are matched case-insensitively, so they are stored that way too."""
+    return email.strip().lower()
+
+
 async def request_magic_link(
     engine: AsyncEngine,
     *,
@@ -60,9 +66,25 @@ async def request_magic_link(
     """Send a link if the address belongs to this tenant, and say nothing either way."""
     moment = _now(now)
     async with tenant_session(engine, tenant_id) as session:
-        user = await session.scalar(select(User).where(User.email == email))
+        user = await session.scalar(
+            select(User).where(func.lower(User.email) == normalise_email(email))
+        )
         if user is None:
             return
+
+        # Cap outstanding links: an old email must not stay usable for ever.
+        open_links = (
+            await session.scalars(
+                select(AuthMagicLink)
+                .where(AuthMagicLink.user_id == user.id, AuthMagicLink.consumed_at.is_(None))
+                .order_by(AuthMagicLink.created_at)
+            )
+        ).all()
+        for stale in open_links[: max(0, len(open_links) - MAX_OPEN_LINKS + 1)]:
+            await session.execute(
+                update(AuthMagicLink).where(AuthMagicLink.id == stale.id).values(consumed_at=moment)
+            )
+
         token = new_token(tenant_id)
         session.add(
             AuthMagicLink(
@@ -109,7 +131,18 @@ async def login_with_magic_link(
             )
         )
         if role is None:
-            raise LinkNotUsable("this user is not a member of the tenant")
+            raise LinkNotUsable("this link cannot be used")
+
+        # Any other open link for this user stops working once one is used.
+        await session.execute(
+            update(AuthMagicLink)
+            .where(
+                AuthMagicLink.user_id == link.user_id,
+                AuthMagicLink.id != link.id,
+                AuthMagicLink.consumed_at.is_(None),
+            )
+            .values(consumed_at=moment)
+        )
 
         session_token = new_token(tenant_id)
         session.add(
@@ -155,7 +188,10 @@ async def resolve_session(
 
 async def revoke_session(engine: AsyncEngine, token: str, *, now: datetime | None = None) -> None:
     moment = _now(now)
-    tenant_id = tenant_from_token(token)
+    try:
+        tenant_id = tenant_from_token(token)
+    except InvalidToken:
+        return  # revoking something that is not a token is a no-op, not an error
     async with tenant_session(engine, tenant_id) as session:
         await session.execute(
             update(AuthSession)
