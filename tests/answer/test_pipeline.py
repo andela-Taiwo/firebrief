@@ -398,10 +398,12 @@ async def test_personal_data_is_redacted_before_the_model_sees_it() -> None:
     assert [finding.kind.value for finding in result.redactions] == ["email"]
 
 
-async def test_redaction_does_not_change_what_the_reader_asked() -> None:
+async def test_the_result_keeps_only_the_redacted_question() -> None:
+    """The caller holds what the reader typed; the result holds what may be stored."""
     provider = FakeProvider(text=ANSWER)
     question = "I am ada@example.com, how long can a dead end be?"
 
     result = await answer_from_sources(question, [source()], provider=provider, judge=FixedJudge())
 
-    assert result.question == question
+    assert "ada@example.com" not in result.question
+    assert "[REDACTED:email]" in result.question
