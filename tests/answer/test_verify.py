@@ -217,8 +217,10 @@ def test_claims_are_parsed_with_their_markers_and_quotes() -> None:
     assert len(claims) == 2
     assert claims[0].text == "One thing."
     assert claims[0].markers == ()
+    assert claims[0].quotes == ()
+    assert claims[1].text == "Two thing."
     assert claims[1].markers == (1, 2)
-    assert DEAD_ENDS in claims[1].text or claims[1].quotes
+    assert claims[1].quotes == ((1, DEAD_ENDS),)
 
 
 def test_normalise_collapses_case_and_whitespace() -> None:
@@ -233,3 +235,38 @@ def test_find_span_respects_word_boundaries(source_text: str, quote: str) -> Non
     span = find_span(source_text, quote)
 
     assert (span is not None) == (quote != "metre")
+
+
+async def test_offsets_point_at_the_quote_in_the_original_text() -> None:
+    """NFKC changes length, so offsets must be found in the original, not a copy."""
+    prefix = "Note \ufb01re and 5 m\u00b2. "
+    chunk = source(prefix + DEAD_ENDS)
+
+    result = await verify_answer(answer(DEAD_ENDS), [chunk], judge=FixedJudge())
+    check = result.claims[0].checks[0]
+
+    assert check.char_start is not None
+    assert check.char_end is not None
+    assert chunk.text[check.char_start : check.char_end] == DEAD_ENDS
+
+
+async def test_a_curly_quoted_multi_sentence_passage_is_one_claim() -> None:
+    quote = "First rule applies here. Second rule applies here."
+    result = await verify_answer(f"\u201c{quote}\u201d [1]", [source(quote)], judge=FixedJudge())
+
+    assert len(result.claims) == 1
+    assert result.verdict is Verdict.VERIFIED
+
+
+async def test_a_capitalised_abbreviation_does_not_split_a_claim() -> None:
+    claim = f'E.g. Dead ends are capped: "{DEAD_ENDS}" [1]'
+    result = await verify_answer(claim, [source(DEAD_ENDS)], judge=FixedJudge())
+
+    assert len(result.claims) == 1
+    assert result.verdict is Verdict.VERIFIED
+
+
+async def test_a_judge_error_records_its_type() -> None:
+    result = await verify_answer(answer(DEAD_ENDS), [source(DEAD_ENDS)], judge=FailingJudge())
+
+    assert result.claims[0].checks[0].error == "TimeoutError"
