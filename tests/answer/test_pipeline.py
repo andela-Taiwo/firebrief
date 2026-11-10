@@ -82,7 +82,7 @@ async def test_a_fabricated_quote_is_refused_as_unverified() -> None:
     )
 
     assert not result.answered
-    assert result.refusal is RefusalReason.UNVERIFIED
+    assert result.refusal_reason is RefusalReason.UNVERIFIED
     assert result.verification is not None
     assert not result.verification.may_show
 
@@ -94,7 +94,7 @@ async def test_the_model_can_decline() -> None:
         "What colour is the front door?", [source()], provider=provider, judge=FixedJudge()
     )
 
-    assert result.refusal is RefusalReason.INSUFFICIENT_EVIDENCE
+    assert result.refusal_reason is RefusalReason.INSUFFICIENT_EVIDENCE
 
 
 async def test_no_sources_means_no_model_call() -> None:
@@ -104,7 +104,7 @@ async def test_no_sources_means_no_model_call() -> None:
         "How long can a dead end be?", [], provider=provider, judge=FixedJudge()
     )
 
-    assert result.refusal is RefusalReason.NO_SOURCES
+    assert result.refusal_reason is RefusalReason.NO_SOURCES
     assert provider.calls == []
 
 
@@ -115,7 +115,7 @@ async def test_a_provider_failure_is_a_refusal_not_an_exception() -> None:
         "How long can a dead end be?", [source()], provider=provider, judge=FixedJudge()
     )
 
-    assert result.refusal is RefusalReason.MODEL_UNAVAILABLE
+    assert result.refusal_reason is RefusalReason.MODEL_UNAVAILABLE
 
 
 async def test_a_budget_rejection_stops_the_call() -> None:
@@ -132,7 +132,7 @@ async def test_a_budget_rejection_stops_the_call() -> None:
         scope=SCOPE,
     )
 
-    assert result.refusal is RefusalReason.BUDGET_EXHAUSTED
+    assert result.refusal_reason is RefusalReason.BUDGET_EXHAUSTED
     assert provider.calls == []
 
 
@@ -170,7 +170,7 @@ async def test_a_failed_call_releases_its_reservation() -> None:
         scope=SCOPE,
     )
 
-    assert result.refusal is RefusalReason.MODEL_UNAVAILABLE
+    assert result.refusal_reason is RefusalReason.MODEL_UNAVAILABLE
     assert all(counter.reserved == 0 for counter in ledger.snapshot().values())
 
 
@@ -202,3 +202,61 @@ async def test_a_budget_without_a_scope_is_refused() -> None:
         await answer_from_sources(
             "question", [source()], provider=FakeProvider(), judge=FixedJudge(), budget=service
         )
+
+
+async def test_a_refusal_explains_itself_and_shows_the_evidence() -> None:
+    provider = FakeProvider(
+        text='Dead ends are capped at ten metres: "Dead ends must be limited to ten metres." [1]'
+    )
+
+    result = await answer_from_sources(
+        "How long can a dead end be?", [source()], provider=provider, judge=FixedJudge()
+    )
+
+    assert result.refusal is not None
+    assert result.refusal.reason is RefusalReason.UNVERIFIED
+    assert "could not verify" in result.refusal.message
+    assert len(result.refusal.evidence) == 1
+    assert result.refusal.evidence[0].heading_path == "Doc > Escape routes"
+
+
+async def test_a_no_sources_refusal_says_so_in_plain_words() -> None:
+    result = await answer_from_sources("question", [], provider=FakeProvider(), judge=FixedJudge())
+
+    assert result.refusal is not None
+    assert result.refusal.reason is RefusalReason.NO_SOURCES
+    assert "not going to guess" in result.refusal.message
+    assert result.refusal.evidence == ()
+
+
+async def test_every_reason_has_a_message() -> None:
+    from firebrief.answer.refusal import MESSAGES
+
+    assert set(MESSAGES) == set(RefusalReason)
+    assert all(message.strip() for message in MESSAGES.values())
+
+
+async def test_an_unverified_refusal_names_the_failing_checks() -> None:
+    provider = FakeProvider(
+        text='Dead ends are capped at ten metres: "Dead ends must be limited to ten metres." [1]'
+    )
+
+    result = await answer_from_sources(
+        "How long can a dead end be?", [source()], provider=provider, judge=FixedJudge()
+    )
+
+    assert result.refusal is not None
+    assert any("missing_span" in detail for detail in result.refusal.details)
+
+
+def test_the_audit_form_carries_the_evidence_without_the_answer() -> None:
+    from firebrief.answer.refusal import build_refusal
+
+    refusal = build_refusal(RefusalReason.NO_SOURCES, (source(),))
+    audit = refusal.for_audit()
+
+    assert audit["reason"] == "no_sources"
+    evidence = audit["evidence"]
+    assert isinstance(evidence, list)
+    assert evidence[0]["heading_path"] == "Doc > Escape routes"
+    assert "text" not in evidence[0]

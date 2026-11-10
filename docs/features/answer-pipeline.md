@@ -92,3 +92,27 @@ retrieval in. Canaries: skip verification; call the model before the budget chec
 | C44 | Verification skipped | fabricated-quote test shows the answer |
 | C45 | Budget checked after the call | budget test calls the model |
 | C46 | `INSUFFICIENT_EVIDENCE` ignored | decline test answers instead of refusing |
+
+## Refusals as an outcome, not an error
+
+A refusal now carries what a person needs to act on it: a reason code, a plain-language
+message, the evidence that was considered, and — when verification failed — the specific
+checks that failed. `for_audit()` produces the record to store: reason, message, details
+and where the evidence came from, without the passage text.
+
+The five messages are written for a reader, not a log:
+
+| Reason | What the reader is told |
+|---|---|
+| `no_sources` | Nothing covers that question, and it will not guess |
+| `insufficient_evidence` | Guidance exists on the topic but not enough to answer |
+| `unverified` | Relevant guidance was found but the answer could not be checked against it |
+| `model_unavailable` | Service down, nothing charged |
+| `budget_exhausted` | The usage limit would be exceeded |
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C47 | Verification details dropped from the refusal | failing-checks test |
+| C48 | Audit payload includes the passage text | audit test asserts `text` is absent |

@@ -56,7 +56,7 @@ async def test_a_question_with_a_fabricated_quote_is_refused(owner_engine: Async
         )
 
     assert not result.answered
-    assert result.refusal is RefusalReason.UNVERIFIED
+    assert result.refusal_reason is RefusalReason.UNVERIFIED
 
 
 async def test_a_question_the_corpus_cannot_answer_is_refused(owner_engine: AsyncEngine) -> None:
@@ -73,6 +73,6 @@ async def test_a_question_the_corpus_cannot_answer_is_refused(owner_engine: Asyn
             judge=FixedJudge(),
         )
 
-    assert result.refusal in {RefusalReason.NO_SOURCES, RefusalReason.UNVERIFIED}
-    if result.refusal is RefusalReason.NO_SOURCES:
+    assert result.refusal_reason in {RefusalReason.NO_SOURCES, RefusalReason.UNVERIFIED}
+    if result.refusal_reason is RefusalReason.NO_SOURCES:
         assert provider.calls == []

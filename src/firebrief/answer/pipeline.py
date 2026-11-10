@@ -10,12 +10,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
-from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from firebrief.answer.judge import SupportJudge
 from firebrief.answer.prompt import INSUFFICIENT_EVIDENCE, build_prompt
+from firebrief.answer.refusal import Refusal, RefusalReason, build_refusal
 from firebrief.answer.types import Verification
 from firebrief.answer.verify import verify_answer
 from firebrief.budget import BudgetService, estimate_prompt_tokens
@@ -26,14 +26,6 @@ from firebrief.retrieval.types import Retrieved
 
 DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 DEFAULT_MAX_TOKENS = 800
-
-
-class RefusalReason(StrEnum):
-    NO_SOURCES = "no_sources"
-    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
-    UNVERIFIED = "unverified"
-    MODEL_UNAVAILABLE = "model_unavailable"
-    BUDGET_EXHAUSTED = "budget_exhausted"
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +39,7 @@ class BudgetScope:
 class AnswerResult:
     question: str
     answer: str | None
-    refusal: RefusalReason | None
+    refusal: Refusal | None
     sources: tuple[Retrieved, ...]
     verification: Verification | None = None
     usage: Usage | None = None
@@ -55,6 +47,10 @@ class AnswerResult:
     @property
     def answered(self) -> bool:
         return self.answer is not None
+
+    @property
+    def refusal_reason(self) -> RefusalReason | None:
+        return self.refusal.reason if self.refusal is not None else None
 
 
 def _refuse(
@@ -68,7 +64,7 @@ def _refuse(
     return AnswerResult(
         question=question,
         answer=None,
-        refusal=reason,
+        refusal=build_refusal(reason, tuple(sources), verification),
         sources=tuple(sources),
         verification=verification,
         usage=usage,
