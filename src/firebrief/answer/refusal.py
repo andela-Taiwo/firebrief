@@ -22,6 +22,7 @@ class RefusalReason(StrEnum):
     MODEL_UNAVAILABLE = "model_unavailable"
     BUDGET_EXHAUSTED = "budget_exhausted"
     TRUNCATED = "truncated"
+    BUDGET_UNAVAILABLE = "budget_unavailable"
 
 
 MESSAGES: dict[RefusalReason, str] = {
@@ -39,6 +40,9 @@ MESSAGES: dict[RefusalReason, str] = {
         "The answering service is unavailable right now. Nothing was charged for this."
     ),
     RefusalReason.BUDGET_EXHAUSTED: ("This question would exceed your usage limit."),
+    RefusalReason.BUDGET_UNAVAILABLE: (
+        "Usage checks are unavailable right now, so nothing was attempted. Nothing was charged."
+    ),
     RefusalReason.TRUNCATED: (
         "The answer was cut off before it finished, so it cannot be checked. "
         "Try a narrower question."

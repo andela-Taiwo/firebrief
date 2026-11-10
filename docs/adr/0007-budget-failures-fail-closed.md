@@ -13,8 +13,9 @@ the spend is not recorded. Failing closed refuses the question.
 ## Decision
 
 **Fail closed.** If the budget service raises, the question is refused with
-`BUDGET_EXHAUSTED` and a detail saying the budget service was unavailable. Nothing is
-attempted, so nothing is spent unrecorded.
+`BUDGET_UNAVAILABLE` — a distinct reason, because "your limit is used up" is false and
+would confuse the reader — and a detail naming the exception type. Nothing is attempted,
+so nothing is spent unrecorded.
 
 Bookkeeping failures *after* the call — settling or releasing — are logged and swallowed.
 An answer that was produced and verified is still shown; its cost is recovered by the

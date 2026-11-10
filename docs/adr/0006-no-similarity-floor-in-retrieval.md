@@ -35,3 +35,14 @@ The parameter remains, so an evaluation can measure what a floor would cost.
 
 The evaluation set is large enough to calibrate a per-model floor, or the answer pipeline
 shows refusals that a floor would have prevented.
+
+
+## Addendum — the pipeline is where a floor belongs
+
+Retrieval still applies no floor. The answer pipeline accepts `min_similarity` and passes
+it to retrieval, so an unrelated question can be refused as `no_sources` before a model
+call rather than after one. The default is unset: a floor is per embedding model and has to
+be calibrated against the evaluation set, not guessed here.
+
+Until it is set, unrelated questions reach the model and are refused as `unverified`. That
+is honest but costs a call, so calibrating the floor is a task for the evaluation harness.

@@ -162,3 +162,35 @@ integration tests now run as the **runtime role** rather than the owner.
 | C49 | Request ID falls back to the question text | two-questions test sees the same ID |
 | C50 | Decline detection requires an exact match | variants test refuses as unverified |
 | C51 | Truncation not checked | truncated test reports unverified |
+
+
+## Re-review 2 responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| Should | A ledger outage was reported as "limit exceeded" | `BUDGET_UNAVAILABLE` with its own message, detail naming the exception type, and a test whose budget raises. ADR 0007 records it |
+| Should | Unrelated questions reached the model and were called "relevant guidance" | `answer_question` takes `min_similarity` and passes it to retrieval, so a floor refuses as `no_sources` before any call. The default stays unset — a floor is per embedding model and must be calibrated, not guessed (ADR 0006 addendum). The existing behaviour is now a test named for what it documents, not an endorsement |
+| Should | The question could forge source markup | The question, title, heading, edition and text are HTML-escaped before they enter the prompt; tested with a hostile question |
+| Minor | Two identical questions were only tested sequentially | An `asyncio.gather` version asserts two reservations and double the spend |
+| Minor | Truncation test checked only the reason | It now also asserts usage is recorded and the judge was not called |
+
+### Carried into the next PRs
+
+- **Settle and release failures leak capacity.** `_safe` keeps a bookkeeping failure from
+  crashing an answer, but a failed release holds the reservation for good. The Postgres
+  ledger needs reservation expiry and a sweeper, with a test whose settle raises.
+- **Pricing after failover.** Settlement prices the reserved model; if the router fails
+  over, the charge should follow `response.model`, and the reservation should cover the
+  most expensive route.
+- **Providers' own refusals.** Anthropic's `refusal` and OpenAI's `content_filter` need a
+  distinct reason rather than falling through to verification.
+- **Audit record.** `AnswerResult` carries a request ID; the audit PR needs tenant,
+  per-stage timings, retrieval scores, the judge record and cost.
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C52 | Outage reported as an exhausted limit | outage test |
+| C53 | `min_similarity` not passed to retrieval | floor test calls the model |
+| C54 | Prompt escaping removed | hostile-question test |

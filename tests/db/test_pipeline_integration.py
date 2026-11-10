@@ -63,10 +63,10 @@ async def test_a_question_with_a_fabricated_quote_is_refused(
     assert result.refusal_reason is RefusalReason.UNVERIFIED
 
 
-async def test_an_unanswerable_question_is_refused(
+async def test_without_a_relevance_floor_an_unrelated_question_reaches_the_model(
     owner_engine: AsyncEngine, app_engine: AsyncEngine
 ) -> None:
-    """No floor on similarity, so the model is asked and its uncited answer is refused."""
+    """Documents current behaviour: no floor means the top k always reach the model."""
     await _corpus(owner_engine)
     provider = FakeProvider(text="anything at all")
 
@@ -108,3 +108,23 @@ async def test_two_questions_get_different_request_ids(
     assert first.request_id
     assert second.request_id
     assert first.request_id != second.request_id
+
+
+async def test_a_relevance_floor_returns_no_sources_without_calling_the_model(
+    owner_engine: AsyncEngine, app_engine: AsyncEngine
+) -> None:
+    await _corpus(owner_engine)
+    provider = FakeProvider(text="anything at all")
+
+    async with AsyncSession(app_engine) as session:
+        result = await answer_question(
+            session,
+            "zzzz qqqq",
+            embedder=BagOfWordsEmbedder(),
+            provider=provider,
+            judge=FixedJudge(),
+            min_similarity=0.05,
+        )
+
+    assert result.refusal_reason is RefusalReason.NO_SOURCES
+    assert provider.calls == []

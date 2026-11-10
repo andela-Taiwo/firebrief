@@ -129,9 +129,9 @@ async def answer_from_sources(
             logger.warning("budget reservation failed: %s", type(exc).__name__)
             return _refuse(
                 question,
-                RefusalReason.BUDGET_EXHAUSTED,
+                RefusalReason.BUDGET_UNAVAILABLE,
                 sources,
-                details=("the budget service is unavailable, so nothing was attempted",),
+                details=(f"{type(exc).__name__} while reserving; nothing was attempted",),
                 request_id=request_id,
             )
         if not decision.admitted or decision.reservation is None:
@@ -223,13 +223,16 @@ async def answer_question(
     judge: SupportJudge,
     limit: int = 6,
     as_of: date | None = None,
+    min_similarity: float | None = None,
     model: str = DEFAULT_MODEL,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     budget: BudgetService | None = None,
     scope: BudgetScope | None = None,
     request_id: str | None = None,
 ) -> AnswerResult:
-    sources = await search(session, question, embedder, limit=limit, as_of=as_of)
+    sources = await search(
+        session, question, embedder, limit=limit, as_of=as_of, min_similarity=min_similarity
+    )
     return await answer_from_sources(
         question,
         sources,
