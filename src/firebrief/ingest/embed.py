@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -73,3 +74,30 @@ def validate_vectors(vectors: Sequence[Sequence[float]], *, expected: int, dimen
             raise ValueError(f"expected {dimensions} dimensions, got {len(vector)}")
         if any(not math.isfinite(value) for value in vector):
             raise ValueError("embedding contains NaN or infinity")
+
+
+@dataclass(frozen=True)
+class BagOfWordsEmbedder:
+    """Hashed bag of words: deterministic, offline, and meaningful for ranking.
+
+    The hash-based fake is fine for storage tests, but two different texts are no
+    more similar than two random vectors. This one at least shares buckets with the
+    query, so retrieval tests can assert an ordering.
+    """
+
+    model: str = "bow-256"
+    dimensions: int = 1024
+
+    def _bucket(self, token: str) -> int:
+        digest = hashlib.sha256(token.encode("utf-8")).digest()
+        return int.from_bytes(digest[:4], "big") % self.dimensions
+
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for text in texts:
+            vector = [0.0] * self.dimensions
+            for token in re.findall(r"[a-z0-9]+", text.lower()):
+                vector[self._bucket(token)] += 1.0
+            norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+            vectors.append([value / norm for value in vector])
+        return vectors
