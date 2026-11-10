@@ -11,6 +11,7 @@ a real write would. The TRUNCATE is the other privileged statement.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass
 
@@ -68,6 +69,33 @@ async def seed(owner_engine: AsyncEngine, app_engine: AsyncEngine) -> None:
                     "tenant_id": fixture.tenant_id,
                     "email": fixture.email,
                     "name": fixture.person,
+                },
+            )
+            digest = hashlib.sha256(f"seed-{fixture.tenant_id}".encode()).hexdigest()
+            await session.execute(
+                sa.text(
+                    "insert into auth_magic_links "
+                    "(id, tenant_id, user_id, token_hash, expires_at) "
+                    "values (:id, :tenant_id, :user_id, :digest, now() + interval '15 minutes')"
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "tenant_id": fixture.tenant_id,
+                    "user_id": fixture.user_id,
+                    "digest": digest,
+                },
+            )
+            await session.execute(
+                sa.text(
+                    "insert into auth_sessions "
+                    "(id, tenant_id, user_id, token_hash, expires_at) "
+                    "values (:id, :tenant_id, :user_id, :digest, now() + interval '12 hours')"
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "tenant_id": fixture.tenant_id,
+                    "user_id": fixture.user_id,
+                    "digest": digest,
                 },
             )
             await session.execute(
