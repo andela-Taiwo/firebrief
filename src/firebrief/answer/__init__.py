@@ -21,7 +21,10 @@ __all__ = [
     "ClaimCheck",
     "ClaimResult",
     "FailingJudge",
+    "Finding",
     "FixedJudge",
+    "Kind",
+    "Redaction",
     "Refusal",
     "RefusalReason",
     "Status",
@@ -34,5 +37,6 @@ __all__ = [
     "build_refusal",
     "normalise",
     "parse_claims",
+    "redact",
     "verify_answer",
 ]

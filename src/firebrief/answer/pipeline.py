@@ -22,6 +22,7 @@ from firebrief.answer.refusal import Refusal, RefusalReason, build_refusal
 from firebrief.answer.types import Verification
 from firebrief.answer.verify import verify_answer
 from firebrief.budget import BudgetService, estimate_prompt_tokens
+from firebrief.guardrails import Finding, redact
 from firebrief.ingest.embed import Embedder
 from firebrief.llm import LLMRequest, Message, Provider, Role, Usage
 from firebrief.retrieval.search import search
@@ -50,6 +51,7 @@ class AnswerResult:
     verification: Verification | None = None
     usage: Usage | None = None
     request_id: str = ""
+    redactions: tuple[Finding, ...] = ()
 
     @property
     def answered(self) -> bool:
@@ -75,6 +77,7 @@ def _refuse(
     usage: Usage | None = None,
     details: tuple[str, ...] = (),
     request_id: str = "",
+    redactions: tuple[Finding, ...] = (),
 ) -> AnswerResult:
     return AnswerResult(
         question=question,
@@ -84,6 +87,7 @@ def _refuse(
         verification=verification,
         usage=usage,
         request_id=request_id,
+        redactions=redactions,
     )
 
 
@@ -102,9 +106,17 @@ async def answer_from_sources(
     request_id = request_id or uuid.uuid4().hex
 
     if not sources:
-        return _refuse(question, RefusalReason.NO_SOURCES, sources, request_id=request_id)
+        return _refuse(
+            question,
+            RefusalReason.NO_SOURCES,
+            sources,
+            request_id=request_id,
+            redactions=redact(question).findings,
+        )
 
-    system, user = build_prompt(question, sources)
+    # Retrieval already ran on the original question; only the model call is redacted.
+    redaction = redact(question)
+    system, user = build_prompt(redaction.text, sources)
     request = LLMRequest(
         model=model,
         messages=(Message(Role.SYSTEM, system), Message(Role.USER, user)),
@@ -133,6 +145,7 @@ async def answer_from_sources(
                 sources,
                 details=(f"{type(exc).__name__} while reserving; nothing was attempted",),
                 request_id=request_id,
+                redactions=redaction.findings,
             )
         if not decision.admitted or decision.reservation is None:
             details = ()
@@ -144,6 +157,7 @@ async def answer_from_sources(
                 sources,
                 details=details,
                 request_id=request_id,
+                redactions=redaction.findings,
             )
         reservation = decision.reservation
 
@@ -173,6 +187,7 @@ async def answer_from_sources(
             sources,
             usage=response.usage,
             request_id=request_id,
+            redactions=redaction.findings,
         )
 
     if (response.finish_reason or "").lower() in TRUNCATION_REASONS:
@@ -182,6 +197,7 @@ async def answer_from_sources(
             sources,
             usage=response.usage,
             request_id=request_id,
+            redactions=redaction.findings,
         )
 
     verification = await verify_answer(text, sources, judge=judge)
@@ -193,6 +209,7 @@ async def answer_from_sources(
             verification=verification,
             usage=response.usage,
             request_id=request_id,
+            redactions=redaction.findings,
         )
 
     return AnswerResult(
@@ -203,6 +220,7 @@ async def answer_from_sources(
         verification=verification,
         usage=response.usage,
         request_id=request_id,
+        redactions=redaction.findings,
     )
 
 
