@@ -35,6 +35,15 @@ make help       # every target
 - Boundaries: `firebrief.budget` and `firebrief.llm` must not import each other, and neither may
   import the API layer. CI enforces it.
 
+## Before you claim something works
+
+Two habits, both in `docs/RULEBOOK.md` because both have gone wrong here:
+
+- Prove the test can fail: `scripts/canary.py` removes one behaviour and insists a
+  specific test goes red.
+- Prove it on a clean clone: `make check-clean` clones the repository and runs the suite
+  there, so a missing file cannot hide behind a dirty working tree.
+
 ## Requirements for a merge
 
 - `make check` green and the secret scan green.
