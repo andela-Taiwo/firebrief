@@ -106,3 +106,32 @@ suite is green: it was green for the wrong reason.
 | C29 | `vector_search` returns nothing | `test_the_vector_side_finds_a_chunk_on_its_own` |
 | C30 | `text_search` returns nothing | `test_the_keyword_side_finds_a_chunk_on_its_own` |
 | C31 | Cosine similarity inverted to distance | "no matches" test: unrelated chunks came back |
+
+
+## Review responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| **Must** | Retrieval ignored versions, so superseded editions competed with current ones | Both sides join a `current` CTE using `select_current`'s rule (latest `effective_from` not after `as_of`, then `fetched_at`). `as_of` is a parameter, defaulting to today. Tested at three dates: 2020 returns the 2019 edition, 2023 and today return the 2022 one |
+| **Must** | The two sides searched different chunk sets | Both filter on `embedding_model` and `chunker`. Tested with two embedded sets: no duplicates, and only the searched model is returned |
+| Should | Lexical identifiers may not survive the English parser | `FD30S` and `BS 5839` are now tested through the keyword side, and pass. They failed first because my fixture had the wrong corpus, which is recorded rather than glossed |
+| Should | A floor of 0.1 only suits the fake embedder | The floor defaults to none; ADR 0006 records why relevance belongs after retrieval, and the "no matches" test passes an explicit floor |
+| Should | Query embeddings bypass the budget | Not fixed. Retrieval has no tenant context; recorded in ADR 0006 as the answer pipeline's job |
+| Should | `candidates >= limit` unvalidated | Raises `ValueError`, tested |
+| Perf | Unnested vector, per-row norms | Recorded in ADR 0005 with the two changes that would help |
+| Minor | `bow-256` had 1024 dimensions | Renamed `bow-1024` |
+| Minor | `Retrieved` lacked citation fields | Carries `embedding_model`, `document_title`, `edition` and `source_url` |
+| Minor | `include_object` hid the index from drift | `test_the_full_text_index_exists` asserts its definition |
+| Test | Paraphrase test overclaimed | Renamed `test_partial_word_overlap_finds_its_section`; genuine paraphrase is a live-evaluation concern |
+| Test | Recall test overclaimed | Docstring now calls it a smoke test; compares the last path segment exactly |
+| Test | Tie-break test was weak | Ordering extracted into `order()` and unit-tested with an exact tie |
+| Test | `fuse` had no exact-value assertions | `fuse([A],[A]) == {A: 2/61}`, `fuse([],[]) == {}` |
+| Minor | Fixtures repeated in four files | Corpus reset is one autouse fixture in `tests/db/conftest.py`; the retrieval corpus lives in `tests/db/data.py` |
+
+### Canaries added
+
+| # | Break | Caught by |
+|---|---|---|
+| C32 | Version CTE removed | superseded-edition test returns the 2019 chunks |
+| C33 | Text side not filtered by model | two-set test duplicates evidence |
+| C34 | `candidates < limit` not validated | validation test does not raise |
