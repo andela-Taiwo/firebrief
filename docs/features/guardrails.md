@@ -88,3 +88,37 @@ redaction from the prompt.
 | C58 | The prompt is built from the raw question | pipeline redaction test |
 | C59 | A finding is fabricated with the text length as its value | findings test |
 | C60 | The card pattern widened to any digit run | corpus vocabulary test (`BS 5839`) |
+
+## Review responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| **Must** | The raw question still left the process — the query embedding sends it to a provider | Redaction moved to the boundary: `answer_question` redacts **before** retrieval, so the embedder, the prompt and the result all use the redacted text. A recording embedder test asserts the email never reaches it |
+| **Must** | The raw question would be persisted by the audit log | `AnswerResult.question` is the redacted question; the caller keeps what the reader typed. Recorded in ADR 0008 |
+| Should | Bracketed and dotted UK phone formats leaked | Optional opening bracket, `(0)` after `+44`, `.` as a separator; each format tested, and a whole-string assertion catches a stray bracket left behind |
+| Should | NI numbers were case-sensitive | `re.IGNORECASE`, tested lowercase |
+| Should | Any 13–19 digit run was treated as a card | Luhn check; a same-length reference number is left alone |
+| Should | False positives untested against guidance text | Dimensions, `BS EN 1634-1:2014`, `BS 9991:2015`, `Category L1`, `30 minutes`, `10/11/2026`, `Regulation 38` and `SI 2005/1541` all survive |
+| Should | `assert text not in result.text` was nearly always true | Each test now asserts the specific value is gone and the specific mask is present |
+| Should | `type(result.findings[0])(...)` hid the type | `Finding` imported and constructed directly |
+| Should | Kinds were only tested one at a time | Email, phone and postcode together, pinning the pattern order |
+
+### Recorded for later
+
+- **Prompt-injection scope** is settled in ADR 0008: the verifier is the defence, and
+  intent-guessing is not added.
+- **A stronger detector** can be supplied through the `Redactor` interface (Presidio or an
+  NER service) without the pipeline changing.
+- **The semantic cache** must be keyed on the redacted question, or an entry could hold
+  personal data.
+- **Metrics**: redaction counts per kind, never values.
+- **Known gaps** in the docstring: names, free-text addresses, obfuscated forms.
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C61 | Embedding uses the raw question | recording-embedder test |
+| C62 | Luhn check removed | long-reference test |
+| C63 | NI pattern case-sensitive | lowercase NI case |
+| C64 | Opening bracket not part of the phone match | whole-string phone test |
