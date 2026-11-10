@@ -100,3 +100,29 @@ always accept.
 | C35 | Existence check always true | absent-quote test: answer verified |
 | C36 | Uncited claims allowed | uncited test: status not `UNCITED` |
 | C37 | Judge result ignored | rejecting-judge test: answer verified |
+
+## Review responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| **Must** | A quote was accepted if it existed in *any* cited source, not the one it cites | Quotes are attributed to the marker that follows them (or the preceding one), and existence is checked only in that source. Tested with the quote present in [2] but cited as [1] |
+| **Must** | Without a judge, a contradiction verified | `judge` is now a required keyword argument, and a failing judge withholds. The "ten metres" contradiction is tested with a rejecting judge |
+| **Must** | Judge failures escaped | `supports` is wrapped; a timeout becomes `JUDGE_ERROR` and withholds |
+| **Must** | Trivial quotes proved nothing | A quote needs at least six words; `"must be"` is refused with `QUOTE_TOO_SHORT` |
+| **Must** | The judge saw the source's own words inside the claim | The judge receives the claim with quotes removed, the quote, and a ±200 character window around the match. Asserted directly on the judge's arguments |
+| **Must** | Multiple markers were checked as "every quote in every source" | Each marker occurrence needs its own quote; `[1][2]` with one quote withholds, and `[1][1]` with one quote withholds |
+| Should | Sentence splitting broke multi-sentence quotes and abbreviations | Quotes are masked before splitting, and common abbreviations are protected |
+| Should | Matching ignored word boundaries | Quotes are matched as a contiguous run of tokens, so `metre` does not match inside `metres` |
+| Should | Typography was not normalised | NFKC plus a mapping for curly quotes, apostrophes, dashes and non-breaking spaces |
+| Should | The judge was not recorded | `Verification` carries `judge_model` and `judge_prompt_version` |
+| Minor | Checks lacked section, version and offsets | `ClaimCheck` carries `section_id`, `version_id`, `char_start`, `char_end` |
+| Minor | Answer noise became UNCITED claims | Still withheld; the answer format is pinned by the generation prompt's contract, tested against `"<quote>" [n]` |
+| Decision | Elisions in quotes | Spliced quotes are not accepted: a quote is matched as a contiguous run, so `"..."` inside it fails existence |
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C38 | Existence searched every source | wrong-source test verifies |
+| C39 | Judge exception propagates | `TimeoutError` escapes `verify_answer` |
+| C40 | Minimum quote length removed | trivial-quote test verifies |
