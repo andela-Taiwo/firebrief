@@ -10,9 +10,12 @@ from enum import StrEnum
 class Status(StrEnum):
     VERIFIED = "verified"
     MISSING_SPAN = "missing_span"
+    QUOTE_TOO_SHORT = "quote_too_short"
     UNKNOWN_MARKER = "unknown_marker"
+    UNATTRIBUTED = "unattributed"
     UNCITED = "uncited"
     UNSUPPORTED = "unsupported"
+    JUDGE_ERROR = "judge_error"
 
 
 class Verdict(StrEnum):
@@ -26,6 +29,10 @@ class ClaimCheck:
     chunk_id: uuid.UUID | None
     status: Status
     quote: str = ""
+    section_id: uuid.UUID | None = None
+    version_id: uuid.UUID | None = None
+    char_start: int | None = None
+    char_end: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +49,8 @@ class ClaimResult:
 class Verification:
     claims: tuple[ClaimResult, ...]
     verdict: Verdict
+    judge_model: str
+    judge_prompt_version: str
 
     @property
     def may_show(self) -> bool:
