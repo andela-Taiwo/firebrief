@@ -152,3 +152,56 @@ POSTs, keeping tokens out of logs — is `api-hardening`'s job and is recorded t
 | Should | "Consumed" conflates used and superseded | **Decided, not yet built:** `ended_reason` (`used` \| `superseded`) lands in the audit PR's migration, because that is where the distinction is consumed. Until then the column is absent and the audit log cannot tell them apart — recorded rather than implied |
 | Should | Two overlapping email constraints | `uq_users_tenant_email` is superseded by the `lower(email)` index and will be dropped in a later migration; **onboarding must store normalised addresses**, since nothing enforces that yet |
 | Should | One UPDATE per stale link | A single `update ... where id in (...)` |
+
+## Follow-ups, carried into their own branch
+
+The three items deferred at merge are done here, before the audit log depends on them:
+
+| Item | What changed |
+|---|---|
+| `ended_reason` | `used` when a link logs someone in, `superseded` when a newer link or a later login invalidates it. The audit log can now say which, and `consumed_at` alone could not |
+| Normalised emails on write | A `BEFORE INSERT OR UPDATE OF email` trigger lowercases and trims, so onboarding cannot store an address that bypasses the `lower(email)` index |
+| One email constraint | `uq_users_tenant_email` dropped; the `lower(email)` index is the single source of truth |
+
+Also added: `revoke_user_sessions`, for "log out everywhere" and offboarding, which revokes
+every open session for a user in one statement.
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C74 | The invalidation forgets `ended_reason` | superseded-link test |
+| C75 | The claim records `superseded` instead of `used` | used-link test |
+
+### Still open, and where they go
+
+- **Email-first login** needs a narrow `security definer` lookup (email → tenant ids). It is
+  the one place auth would cross tenants, so it gets its own review.
+- **Timing** differs between known and unknown addresses; queue the send and rate-limit per
+  address and IP (`rate-limiter`).
+- **Browser handling** (HttpOnly cookie, CSRF, clearing the URL, tokens out of logs) belongs
+  to `api-hardening`.
+- **Purge** of expired links and sessions: the app role cannot delete them, so it needs a
+  privileged job alongside the audit log's purge path.
+
+
+## Follow-up review responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| Should | `ended_reason` and `consumed_at` could disagree, and a reason could be rewritten | A check ties them (`(consumed_at is null) = (ended_reason is null)`) and a trigger makes the ending write-once: NULL may become a value, a value may never change. Both tested |
+| Should | Existing consumed rows had no reason | Backfilled as `unknown` — honest, rather than guessing `used`. `unknown` is an allowed value |
+| Should | The check constraint names differed between model and migration | Both now use the convention-generated names, `ck_auth_magic_links_ended_reason_allowed` and `ck_auth_magic_links_consumed_with_reason`. Autogenerate does not compare checks, so this was found by reading, not by the tooling |
+| Should | The email backfill could collide on trimmed addresses | The migration refuses with a clear exception if trimming would collide two rows, before changing anything |
+| Should | `revoke_user_sessions` has no authorisation | Its docstring says callers must check the actor is the user or an admin; enforcement belongs with the API |
+| Test | The revoke test used `>= 2` | Exact count (two logins plus the fixture's seeded session), and another user's session still resolves afterwards |
+| Test | Normalisation on update untested | Added |
+| Test | Unknown reason, reason without consumption, rewritten reason | All added |
+| Minor | `lower()` is now redundant | Kept deliberately as defence in depth: a direct SQL write that bypasses the trigger still cannot create a case-collision. Recorded here so it is a choice, not an oversight |
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C76 | Write-once trigger dropped | reason-rewrite test |
+| C77 | The consumed/reason tie dropped | reason-without-consumption test |
