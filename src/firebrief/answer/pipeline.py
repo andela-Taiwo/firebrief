@@ -22,7 +22,7 @@ from firebrief.answer.refusal import Refusal, RefusalReason, build_refusal
 from firebrief.answer.types import Verification
 from firebrief.answer.verify import verify_answer
 from firebrief.budget import BudgetService, estimate_prompt_tokens
-from firebrief.guardrails import Finding, redact
+from firebrief.guardrails import Finding, Redaction, redact
 from firebrief.ingest.embed import Embedder
 from firebrief.llm import LLMRequest, Message, Provider, Role, Usage
 from firebrief.retrieval.search import search
@@ -102,8 +102,15 @@ async def answer_from_sources(
     budget: BudgetService | None = None,
     scope: BudgetScope | None = None,
     request_id: str | None = None,
+    redaction: Redaction | None = None,
 ) -> AnswerResult:
     request_id = request_id or uuid.uuid4().hex
+
+    # Redacted once, at the boundary. The result keeps the redacted question, because
+    # that is the copy that may be stored; the caller still holds what the reader typed.
+    if redaction is None:
+        redaction = redact(question)
+    question = redaction.text
 
     if not sources:
         return _refuse(
@@ -111,11 +118,9 @@ async def answer_from_sources(
             RefusalReason.NO_SOURCES,
             sources,
             request_id=request_id,
-            redactions=redact(question).findings,
+            redactions=redaction.findings,
         )
 
-    # Retrieval already ran on the original question; only the model call is redacted.
-    redaction = redact(question)
     system, user = build_prompt(redaction.text, sources)
     request = LLMRequest(
         model=model,
@@ -248,8 +253,14 @@ async def answer_question(
     scope: BudgetScope | None = None,
     request_id: str | None = None,
 ) -> AnswerResult:
+    redaction = redact(question)
     sources = await search(
-        session, question, embedder, limit=limit, as_of=as_of, min_similarity=min_similarity
+        session,
+        redaction.text,
+        embedder,
+        limit=limit,
+        as_of=as_of,
+        min_similarity=min_similarity,
     )
     return await answer_from_sources(
         question,
@@ -261,4 +272,5 @@ async def answer_question(
         budget=budget,
         scope=scope,
         request_id=request_id,
+        redaction=redaction,
     )
