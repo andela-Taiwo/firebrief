@@ -35,17 +35,6 @@ class WrongDimensionsEmbedder:
         return [[0.0] * 4 for _ in texts]
 
 
-@pytest.fixture(autouse=True)
-async def empty_corpus(owner_engine: AsyncEngine) -> None:
-    async with owner_engine.begin() as connection:
-        await connection.execute(
-            sa.text("select set_config('session_replication_role', 'replica', true)")
-        )
-        await connection.execute(
-            sa.text("truncate table chunks, sections, document_versions, documents cascade")
-        )
-
-
 async def _stored_version(engine: AsyncEngine, html: str | None = None) -> uuid.UUID:
     async with AsyncSession(engine) as session, session.begin():
         document = source() if html is None else source(html)

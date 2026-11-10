@@ -22,22 +22,6 @@ CORPUS_TABLES = ("documents", "document_versions", "sections")
 SECTION_COUNT = 6
 
 
-@pytest.fixture(autouse=True)
-async def empty_corpus(owner_engine: AsyncEngine) -> None:
-    """Reset between tests.
-
-    TRUNCATE is itself guarded, so the owner disables triggers for this
-    transaction only. That is exactly the owner bypass ADR 0003 records.
-    """
-    async with owner_engine.begin() as connection:
-        await connection.execute(
-            sa.text("select set_config('session_replication_role', 'replica', true)")
-        )
-        await connection.execute(
-            sa.text("truncate table sections, document_versions, documents cascade")
-        )
-
-
 async def _ingest(engine: AsyncEngine, document: SourceDocument) -> IngestResult:
     async with AsyncSession(engine) as session, session.begin():
         return await ingest(session, document)

@@ -42,11 +42,25 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+IGNORED_INDEXES = {"ix_chunks_fts"}
+
+
+def include_object(object_, name, type_, reflected, compare_to) -> bool:  # type: ignore[no-untyped-def]
+    """The full-text index is an expression index created in raw SQL.
+
+    Autogenerate cannot represent it, so it would otherwise appear as drift on
+    every check. It is excluded by name, and its definition is asserted by the
+    retrieval tests.
+    """
+    return not (type_ == "index" and name in IGNORED_INDEXES)
+
+
 def _do_run(connection) -> None:  # type: ignore[no-untyped-def]
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
         compare_type=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()

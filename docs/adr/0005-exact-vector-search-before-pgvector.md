@@ -32,3 +32,18 @@ computed in SQL. No extension, no index, no image dependency.
 
 The corpus passes a few thousand chunks, or retrieval latency exceeds 100 ms at p95, or
 the environment can run the pgvector image.
+
+
+## Performance notes
+
+Two changes would make the current query cheaper before pgvector is needed:
+
+- **Normalise vectors at write time.** Cosine then becomes a plain dot product, and the
+  per-row norm computation disappears. It is also the natural shape for a pgvector
+  migration, where `vector_cosine_ops` would do the work in the index.
+- **Store a generated `tsvector` column.** `ts_rank_cd` currently recomputes
+  `to_tsvector('english', heading_path || ' ' || text)` for every matched row. A stored
+  generated column would be computed once per row and would also let autogenerate see the
+  index, removing the `include_object` exclusion in `migrations/env.py`.
+
+Neither is needed at the current corpus size.

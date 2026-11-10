@@ -81,3 +81,18 @@ async def seed(owner_engine: AsyncEngine, app_engine: AsyncEngine) -> None:
                     "user_id": fixture.user_id,
                 },
             )
+
+
+RETRIEVAL_HTML = """
+<main>
+<h1>Fire safety in flats</h1>
+<h2>Fire doors</h2>
+<p>Flat entrance doors must be self-closing and fire-resisting, marked FD30S.</p>
+<h2>Detection</h2>
+<p>Systems should follow BS 5839 and be maintained.</p>
+<h2>Escape routes</h2>
+<p>Dead ends must be limited in length to thirty metres.</p>
+</main>
+"""
+
+RETRIEVAL_REVISED_HTML = RETRIEVAL_HTML.replace("thirty metres", "thirty-five metres")
