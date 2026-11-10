@@ -17,6 +17,7 @@ from firebrief.auth import (
     request_magic_link,
     resolve_session,
     revoke_session,
+    revoke_user_sessions,
 )
 from tests.db.data import TENANT_A, TENANT_B, USER_A, USER_B
 
@@ -255,3 +256,70 @@ async def test_the_runtime_role_cannot_extend_an_expiry(seeded, app_engine) -> N
 
 async def test_revoking_a_malformed_token_is_a_no_op(app_engine) -> None:
     await revoke_session(app_engine, "not-a-token", now=NOW)
+
+
+async def _link_reason(engine: AsyncEngine, token: str) -> str | None:
+    async with engine.connect() as connection:
+        return (
+            await connection.execute(
+                sa.text("select ended_reason from auth_magic_links where token_hash = :h"),
+                {"h": hash_token(token)},
+            )
+        ).scalar_one()
+
+
+async def test_a_used_link_records_why_it_ended(seeded, app_engine, owner_engine) -> None:
+    sender = RecordingEmailSender()
+    await _request(app_engine, sender)
+    token = sender.sent[0][1]
+
+    await login_with_magic_link(app_engine, token, now=NOW)
+
+    assert await _link_reason(owner_engine, token) == "used"
+
+
+async def test_a_superseded_link_records_why_it_ended(seeded, app_engine, owner_engine) -> None:
+    sender = RecordingEmailSender()
+    await _request(app_engine, sender)
+    first = sender.sent[0][1]
+    await _request(app_engine, sender)
+    second = sender.sent[1][1]
+
+    await login_with_magic_link(app_engine, second, now=NOW)
+
+    assert await _link_reason(owner_engine, first) == "superseded"
+    assert await _link_reason(owner_engine, second) == "used"
+
+
+async def test_the_database_normalises_an_email_on_write(seeded, owner_engine) -> None:
+    """Onboarding cannot store a mixed-case address and bypass the lower() index."""
+    async with owner_engine.begin() as connection:
+        await connection.execute(
+            sa.text(
+                "insert into users (id, tenant_id, email, name) "
+                "values (gen_random_uuid(), :t, '  Grace@Beta.Test  ', 'Grace')"
+            ),
+            {"t": TENANT_B},
+        )
+        stored = (
+            await connection.execute(sa.text("select email from users where name = 'Grace'"))
+        ).scalar_one()
+
+    assert stored == "grace@beta.test"
+
+
+async def test_every_session_for_a_user_can_be_revoked(seeded, app_engine) -> None:
+    sender = RecordingEmailSender()
+    tokens = []
+    for _ in range(2):
+        await _request(app_engine, sender)
+        login = await login_with_magic_link(app_engine, sender.sent[-1][1], now=NOW)
+        tokens.append(login.session_token)
+
+    revoked = await revoke_user_sessions(
+        app_engine, tenant_id=uuid.UUID(TENANT_A), user_id=uuid.UUID(USER_A), now=NOW
+    )
+
+    assert revoked >= 2
+    for token in tokens:
+        assert await resolve_session(app_engine, token, now=NOW) is None

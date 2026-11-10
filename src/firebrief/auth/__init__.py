@@ -12,6 +12,7 @@ from firebrief.auth.service import (
     request_magic_link,
     resolve_session,
     revoke_session,
+    revoke_user_sessions,
 )
 from firebrief.auth.tokens import InvalidToken, hash_token, new_token, tenant_from_token
 
@@ -32,5 +33,6 @@ __all__ = [
     "request_magic_link",
     "resolve_session",
     "revoke_session",
+    "revoke_user_sessions",
     "tenant_from_token",
 ]

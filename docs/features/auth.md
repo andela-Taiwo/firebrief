@@ -152,3 +152,34 @@ POSTs, keeping tokens out of logs — is `api-hardening`'s job and is recorded t
 | Should | "Consumed" conflates used and superseded | **Decided, not yet built:** `ended_reason` (`used` \| `superseded`) lands in the audit PR's migration, because that is where the distinction is consumed. Until then the column is absent and the audit log cannot tell them apart — recorded rather than implied |
 | Should | Two overlapping email constraints | `uq_users_tenant_email` is superseded by the `lower(email)` index and will be dropped in a later migration; **onboarding must store normalised addresses**, since nothing enforces that yet |
 | Should | One UPDATE per stale link | A single `update ... where id in (...)` |
+
+## Follow-ups, carried into their own branch
+
+The three items deferred at merge are done here, before the audit log depends on them:
+
+| Item | What changed |
+|---|---|
+| `ended_reason` | `used` when a link logs someone in, `superseded` when a newer link or a later login invalidates it. The audit log can now say which, and `consumed_at` alone could not |
+| Normalised emails on write | A `BEFORE INSERT OR UPDATE OF email` trigger lowercases and trims, so onboarding cannot store an address that bypasses the `lower(email)` index |
+| One email constraint | `uq_users_tenant_email` dropped; the `lower(email)` index is the single source of truth |
+
+Also added: `revoke_user_sessions`, for "log out everywhere" and offboarding, which revokes
+every open session for a user in one statement.
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C74 | The invalidation forgets `ended_reason` | superseded-link test |
+| C75 | The claim records `superseded` instead of `used` | used-link test |
+
+### Still open, and where they go
+
+- **Email-first login** needs a narrow `security definer` lookup (email → tenant ids). It is
+  the one place auth would cross tenants, so it gets its own review.
+- **Timing** differs between known and unknown addresses; queue the send and rate-limit per
+  address and IP (`rate-limiter`).
+- **Browser handling** (HttpOnly cookie, CSRF, clearing the URL, tokens out of logs) belongs
+  to `api-hardening`.
+- **Purge** of expired links and sessions: the app role cannot delete them, so it needs a
+  privileged job alongside the audit log's purge path.

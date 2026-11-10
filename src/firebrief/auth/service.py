@@ -85,7 +85,7 @@ async def request_magic_link(
             await session.execute(
                 update(AuthMagicLink)
                 .where(AuthMagicLink.id.in_([link.id for link in stale]))
-                .values(consumed_at=moment)
+                .values(consumed_at=moment, ended_reason="superseded")
             )
 
         token = new_token(tenant_id)
@@ -129,7 +129,7 @@ async def login_with_magic_link(
                 AuthMagicLink.consumed_at.is_(None),
                 AuthMagicLink.expires_at > moment,
             )
-            .values(consumed_at=moment)
+            .values(consumed_at=moment, ended_reason="used")
         )
         if cast(CursorResult[Any], claimed).rowcount != 1:
             raise LinkNotUsable("this link cannot be used")
@@ -150,7 +150,7 @@ async def login_with_magic_link(
                 AuthMagicLink.id != link.id,
                 AuthMagicLink.consumed_at.is_(None),
             )
-            .values(consumed_at=moment)
+            .values(consumed_at=moment, ended_reason="superseded")
         )
 
         session_token = new_token(tenant_id)
@@ -193,6 +193,24 @@ async def resolve_session(
         if role is None:
             return None
         return AuthContext(tenant_id=tenant_id, user_id=stored.user_id, role=role)
+
+
+async def revoke_user_sessions(
+    engine: AsyncEngine,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    now: datetime | None = None,
+) -> int:
+    """Revoke every open session for a user: "log out everywhere" and offboarding."""
+    moment = _now(now)
+    async with tenant_session(engine, tenant_id) as session:
+        revoked = await session.execute(
+            update(AuthSession)
+            .where(AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None))
+            .values(revoked_at=moment)
+        )
+        return cast(CursorResult[Any], revoked).rowcount
 
 
 async def revoke_session(engine: AsyncEngine, token: str, *, now: datetime | None = None) -> None:

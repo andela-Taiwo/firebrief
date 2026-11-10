@@ -79,7 +79,6 @@ class User(TimestampsMixin, Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
 
     __table_args__ = (
-        UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
         Index("uq_users_tenant_email_lower", "tenant_id", func.lower(text("email")), unique=True),
         # The target of the composite foreign key below. A plain foreign key
         # from memberships would let one tenant point at another tenant's user:
@@ -233,9 +232,11 @@ class AuthMagicLink(Base):
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_reason: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "token_hash", name="uq_auth_links_tenant_hash"),
+        CheckConstraint("ended_reason in ('used', 'superseded')", name="ended_reason_allowed"),
         # The user must belong to the same tenant: RLS does not apply to RI checks.
         ForeignKeyConstraint(
             ["tenant_id", "user_id"],
