@@ -27,7 +27,9 @@ def test_each_pattern_is_redacted(text: str, kind: Kind, secret: str) -> None:
     assert kind in {finding.kind for finding in result.findings}
 
 
-@pytest.mark.parametrize("card", ["4111 1111 1111 1111", "5555 5555 5555 4444"])
+@pytest.mark.parametrize(
+    "card", ["4111 1111 1111 1111", "5555 5555 5555 4444", "4000 0566 5566 5556"]
+)
 def test_a_luhn_valid_card_is_redacted(card: str) -> None:
     result = redact(f"card {card} on file")
 
@@ -101,3 +103,33 @@ def test_text_without_personal_data_is_returned_unchanged() -> None:
 def test_a_phone_number_is_replaced_whole(phone: str) -> None:
     """A stray bracket left behind would mean the pattern started in the wrong place."""
     assert redact(f"call {phone}").text == "call [REDACTED:phone]"
+
+
+def test_a_card_starting_with_zero_is_a_card_not_a_phone() -> None:
+    """Cards are checked first: a group starting 0 would otherwise match as a phone."""
+    result = redact("card 4000 0566 5566 5556")
+
+    assert result.findings == (Finding(kind=Kind.CARD, count=1),)
+    assert result.text == "card [REDACTED:card]"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "requirement B1 1st floor",
+        "level L2 2nd floor",
+        "room F2 3rd floor",
+        "flat B4 4th floor",
+    ],
+)
+def test_ordinals_are_not_postcodes(text: str) -> None:
+    assert not redact(text).changed
+
+
+def test_redaction_is_idempotent() -> None:
+    once = redact("ada@example.com at SW1A 2AA")
+
+    twice = redact(once.text)
+
+    assert twice.text == once.text
+    assert twice.findings == ()

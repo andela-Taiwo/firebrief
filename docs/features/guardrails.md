@@ -122,3 +122,20 @@ redaction from the prompt.
 | C62 | Luhn check removed | long-reference test |
 | C63 | NI pattern case-sensitive | lowercase NI case |
 | C64 | Opening bracket not part of the phone match | whole-string phone test |
+
+
+## Re-review 2 responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| **Must** | The phone pattern could cut a card in half, reporting the wrong kind | Cards run first, before phones, and the phone pattern refuses to start inside a longer digit run. `4000 0566 5566 5556` is now one CARD finding with nothing left behind |
+| Should | Ordinals look like postcodes (`B1 1st`) | The guard sits after the digit (`\d(?!st|nd|rd|th)[A-Z]{2}`), tested against four floor and requirement phrasings |
+| Should | `answer_from_sources` took both a question and a redaction | It takes only the question and redacts internally, so a mismatched redaction cannot be passed. Idempotence is tested |
+| Should | The ADR was missing | ADR 0008 records storage minimisation, patterns-not-DLP, the known gaps, how prompt injection is handled, and why pattern order matters |
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C65 | Phones checked before cards | zero-leading card test |
+| C66 | Ordinal guard removed | floor and requirement negatives |

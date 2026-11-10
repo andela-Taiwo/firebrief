@@ -102,14 +102,12 @@ async def answer_from_sources(
     budget: BudgetService | None = None,
     scope: BudgetScope | None = None,
     request_id: str | None = None,
-    redaction: Redaction | None = None,
 ) -> AnswerResult:
     request_id = request_id or uuid.uuid4().hex
 
-    # Redacted once, at the boundary. The result keeps the redacted question, because
-    # that is the copy that may be stored; the caller still holds what the reader typed.
-    if redaction is None:
-        redaction = redact(question)
+    # Redacted once, here. The result keeps the redacted question, because that is the
+    # copy that may be stored; the caller still holds what the reader typed.
+    redaction: Redaction = redact(question)
     question = redaction.text
 
     if not sources:
@@ -253,10 +251,10 @@ async def answer_question(
     scope: BudgetScope | None = None,
     request_id: str | None = None,
 ) -> AnswerResult:
-    redaction = redact(question)
+    redacted_question = redact(question).text
     sources = await search(
         session,
-        redaction.text,
+        redacted_question,
         embedder,
         limit=limit,
         as_of=as_of,
@@ -272,5 +270,4 @@ async def answer_question(
         budget=budget,
         scope=scope,
         request_id=request_id,
-        redaction=redaction,
     )

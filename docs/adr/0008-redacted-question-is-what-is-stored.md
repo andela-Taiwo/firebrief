@@ -40,3 +40,16 @@ Names and free-text addresses are not detected ("Flat C, 180 Albert Road" keeps 
 except a postcode), and obfuscated forms ("ada [at] example [dot] com") are not covered.
 `redact` is a `Redactor`, so a stronger detector can be supplied per deployment without the
 pipeline changing.
+
+
+## Pattern order matters
+
+Cards are checked before phones. A card group can start with `0` — in
+`4000 0566 5566 5556` the run `0566 5566 5556` matches the phone pattern, so a phone-first
+pass would redact half the card, report the wrong kind and leave `4000` in the text. The
+phone pattern also refuses to start inside a longer digit run, and the postcode pattern
+refuses ordinals (`B1 1st`, `L2 2nd`) so guidance language is not mistaken for a postcode.
+
+`answer_from_sources` always redacts internally and takes only the question: a caller cannot
+supply a redaction for different text. Redaction is idempotent, which is what makes the
+second pass in `answer_question` harmless.

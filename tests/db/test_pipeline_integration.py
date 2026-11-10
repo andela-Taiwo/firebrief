@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from firebrief.answer import FixedJudge, RefusalReason, answer_question
-from firebrief.ingest.embed import BagOfWordsEmbedder
+from firebrief.ingest.embed import BagOfWordsEmbedder, Embedder
 from firebrief.ingest.store import ingest
 from firebrief.ingest.store_embed import embed_version
 from firebrief.llm import FakeProvider
@@ -133,7 +135,7 @@ async def test_a_relevance_floor_returns_no_sources_without_calling_the_model(
 class RecordingEmbedder:
     """Records every string it is asked to embed, so a leak is visible."""
 
-    def __init__(self, inner) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, inner: Embedder) -> None:
         self.inner = inner
         self.texts: list[str] = []
 
@@ -145,7 +147,7 @@ class RecordingEmbedder:
     def dimensions(self) -> int:
         return self.inner.dimensions
 
-    async def embed(self, texts):  # type: ignore[no-untyped-def]
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         self.texts.extend(texts)
         return await self.inner.embed(texts)
 

@@ -32,6 +32,7 @@ class Kind(StrEnum):
 MASK = "[REDACTED:{kind}]"
 
 PHONE = re.compile(
+    r"(?<!\d)"  # never start inside a longer digit run (a card number)
     r"(?:\+44\s?(?:\(0\)\s?)?|\(?0)"  # +44, +44 (0), (0 or 0
     r"\d{2,4}\)?"  # area code, optional closing bracket
     r"[\s.\-]?\d{3,4}[\s.\-]?\d{3,4}\b"
@@ -40,7 +41,10 @@ EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 NATIONAL_INSURANCE = re.compile(
     r"\b[A-CEGHJ-PR-TW-Z]{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?[A-D]\b", re.IGNORECASE
 )
-POSTCODE = re.compile(r"\b[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2}\b", re.IGNORECASE)
+POSTCODE = re.compile(
+    r"\b[A-Z]{1,2}\d[A-Z\d]?\s?\d(?!st\b|nd\b|rd\b|th\b)[A-Z]{2}\b",
+    re.IGNORECASE,
+)
 DIGIT_RUN = re.compile(r"\b(?:\d[ -]?){13,19}\b")
 
 
@@ -91,14 +95,19 @@ def redact(text: str) -> Redaction:
     for kind, pattern in (
         (Kind.EMAIL, EMAIL),
         (Kind.NATIONAL_INSURANCE, NATIONAL_INSURANCE),
-        (Kind.PHONE, PHONE),
-        (Kind.POSTCODE, POSTCODE),
     ):
         redacted, found = pattern.subn(MASK.format(kind=kind.value), redacted)
         if found:
             counts[kind] = counts.get(kind, 0) + found
 
+    # Cards before phones: a card group starting with 0 would otherwise match as a
+    # phone number and leave the rest of the card behind.
     redacted = DIGIT_RUN.sub(lambda match: _mask_card(match, counts), redacted)
+
+    for kind, pattern in ((Kind.PHONE, PHONE), (Kind.POSTCODE, POSTCODE)):
+        redacted, found = pattern.subn(MASK.format(kind=kind.value), redacted)
+        if found:
+            counts[kind] = counts.get(kind, 0) + found
 
     findings = tuple(Finding(kind=kind, count=count) for kind, count in counts.items())
     return Redaction(text=redacted, findings=findings)
