@@ -1,0 +1,40 @@
+# A small labelled set over the checked-in fixture corpus.
+# It exists to prove the harness and its metrics, not to claim quality.
+
+[[cases]]
+id = "dead-ends"
+question = "How long can a dead end be?"
+expect = "answer"
+heading = "Escape routes"
+terms = ["thirty metres"]
+
+[[cases]]
+id = "doors-self-closing"
+question = "Do flat entrance doors need to be self-closing?"
+expect = "answer"
+heading = "Fire doors"
+terms = ["self-closing"]
+
+[[cases]]
+id = "doors-rating"
+question = "What rating are flat entrance doors marked with?"
+expect = "answer"
+heading = "Fire doors"
+terms = ["FD30S"]
+
+[[cases]]
+id = "detection-standard"
+question = "Which standard covers detection systems?"
+expect = "answer"
+heading = "Detection"
+terms = ["BS 5839"]
+
+[[cases]]
+id = "no-answer-colour"
+question = "What colour must the front door be painted?"
+expect = "refuse"
+
+[[cases]]
+id = "no-answer-cost"
+question = "How much does a fire risk assessment cost?"
+expect = "refuse"

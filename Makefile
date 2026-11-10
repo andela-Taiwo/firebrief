@@ -4,7 +4,7 @@ SHELL := /bin/bash
 UV ?= uv
 export UV_CACHE_DIR ?= $(CURDIR)/.uv-cache
 
-.PHONY: help setup check check-clean canary lint fmt fmt-check types boundaries licenses secrets test eval-retrieval db-migrate db-roundtrip up down docker-smoke clean
+.PHONY: help setup check check-clean canary lint fmt fmt-check types boundaries licenses secrets test eval eval-retrieval db-migrate db-roundtrip up down docker-smoke clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | sort \
@@ -44,6 +44,9 @@ check-clean: ## Run make check in a fresh clone (catches untracked-file dependen
 
 canary: ## Break one behaviour and prove a test fails (see docs/RULEBOOK.md)
 	@echo "usage: uv run python scripts/canary.py --file F --old OLD --new NEW --test TEST"
+
+eval: ## Answer evaluation against the extractive baseline
+	$(UV) run python scripts/run_eval.py
 
 eval-retrieval: ## Recall@3 on the retrieval evaluation set
 	$(UV) run pytest tests/db/test_recall.py -q -s
