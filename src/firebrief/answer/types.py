@@ -12,7 +12,6 @@ class Status(StrEnum):
     MISSING_SPAN = "missing_span"
     QUOTE_TOO_SHORT = "quote_too_short"
     UNKNOWN_MARKER = "unknown_marker"
-    UNATTRIBUTED = "unattributed"
     UNCITED = "uncited"
     UNSUPPORTED = "unsupported"
     JUDGE_ERROR = "judge_error"
@@ -33,6 +32,7 @@ class ClaimCheck:
     version_id: uuid.UUID | None = None
     char_start: int | None = None
     char_end: int | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
