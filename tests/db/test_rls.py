@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from firebrief.db.session import tenant_session
 from tests.db.data import TENANT_A, TENANT_B, USER_B
 
-TENANT_TABLES = {"users", "memberships"}
+TENANT_TABLES = {"users", "memberships", "auth_magic_links", "auth_sessions"}
 SELF_SCOPED_TABLES = {"tenants"}
 REVIEWED_GLOBAL_TABLES = {
     "alembic_version",
@@ -243,7 +243,11 @@ async def test_a_tenant_sees_only_its_own_tenants_row(
     assert names == ["Alpha"]
 
 
-@pytest.mark.parametrize("table", sorted(TENANT_TABLES))
+# Only the tables the fixture seeds: the auth tables are empty until someone logs in.
+SEEDED_TABLES = {"users", "memberships"}
+
+
+@pytest.mark.parametrize("table", sorted(SEEDED_TABLES))
 async def test_every_tenant_table_shows_only_its_own_rows(
     app_engine: AsyncEngine, seeded: None, table: str
 ) -> None:
@@ -282,7 +286,9 @@ MUTATIONS: dict[str, tuple[str, str]] = {
 }
 
 
-@pytest.mark.parametrize("table", sorted(TENANT_TABLES))
+# The auth tables are delete-denied at the grant level, so their mutation behaviour is
+# asserted in tests/db/test_auth.py rather than here.
+@pytest.mark.parametrize("table", sorted(MUTATIONS))
 async def test_a_tenant_cannot_update_or_delete_another_tenants_rows(
     app_engine: AsyncEngine, seeded: None, table: str
 ) -> None:
@@ -294,7 +300,10 @@ async def test_a_tenant_cannot_update_or_delete_another_tenants_rows(
     assert rowcount(deleted) == 0, f"{table}: a cross-tenant delete touched rows"
 
 
-@pytest.mark.parametrize("table", sorted(TENANT_TABLES))
+INSERT_TABLES = {"users", "memberships"}
+
+
+@pytest.mark.parametrize("table", sorted(INSERT_TABLES))
 async def test_a_tenant_cannot_insert_a_row_for_another_tenant(
     app_engine: AsyncEngine, seeded: None, table: str
 ) -> None:
