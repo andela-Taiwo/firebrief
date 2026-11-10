@@ -139,3 +139,16 @@ POSTs, keeping tokens out of logs — is `api-hardening`'s job and is recorded t
 | C71 | Lookup case-sensitive | mixed-case login |
 | C72 | Other links not invalidated | stale-link test |
 | C73 | Table-wide update grant | expiry-extension test |
+
+## Re-review 2 responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| Before merge | The POST-only contract must be written down | It is in the "Contract for the API layer" section above **and** in `login_with_magic_link`'s docstring, where a caller will actually see it |
+| Before merge | The constraint tests could pass on a different constraint | Both now assert the constraint name: `fk_auth_sessions_tenant_user` and `uq_users_tenant_email_lower` |
+| Before merge | Delete denial was tested for sessions only | Parametrised over `auth_magic_links` and `auth_sessions` |
+| Should | `resolve_session` still caught every exception | Narrowed to `InvalidToken`; a database failure now surfaces instead of reading as "logged out". Two earlier patches had silently missed this line, which is why it survived two reviews |
+| Should | The link was sent to the typed address | Sent to the stored address, so whitespace and case in the input cannot produce a different recipient |
+| Should | "Consumed" conflates used and superseded | **Decided, not yet built:** `ended_reason` (`used` \| `superseded`) lands in the audit PR's migration, because that is where the distinction is consumed. Until then the column is absent and the audit log cannot tell them apart — recorded rather than implied |
+| Should | Two overlapping email constraints | `uq_users_tenant_email` is superseded by the `lower(email)` index and will be dropped in a later migration; **onboarding must store normalised addresses**, since nothing enforces that yet |
+| Should | One UPDATE per stale link | A single `update ... where id in (...)` |

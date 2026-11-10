@@ -179,7 +179,7 @@ async def test_a_mixed_case_email_can_log_in(seeded, app_engine) -> None:
 
 async def test_two_users_cannot_differ_only_by_email_case(seeded, owner_engine) -> None:
     """The unique index is on lower(email), so this insert must fail."""
-    with pytest.raises(DBAPIError):
+    with pytest.raises(DBAPIError, match="uq_users_tenant_email_lower"):
         async with owner_engine.begin() as connection:
             await connection.execute(
                 sa.text(
@@ -192,7 +192,7 @@ async def test_two_users_cannot_differ_only_by_email_case(seeded, owner_engine) 
 
 async def test_a_row_cannot_point_at_another_tenants_user(seeded, owner_engine) -> None:
     """The composite key carries the tenant, because RI checks bypass RLS."""
-    with pytest.raises(DBAPIError):
+    with pytest.raises(DBAPIError, match="fk_auth_sessions_tenant_user"):
         async with owner_engine.begin() as connection:
             await connection.execute(
                 sa.text(

@@ -80,9 +80,12 @@ async def request_magic_link(
                 .order_by(AuthMagicLink.created_at)
             )
         ).all()
-        for stale in open_links[: max(0, len(open_links) - MAX_OPEN_LINKS + 1)]:
+        stale = open_links[: max(0, len(open_links) - MAX_OPEN_LINKS + 1)]
+        if stale:
             await session.execute(
-                update(AuthMagicLink).where(AuthMagicLink.id == stale.id).values(consumed_at=moment)
+                update(AuthMagicLink)
+                .where(AuthMagicLink.id.in_([link.id for link in stale]))
+                .values(consumed_at=moment)
             )
 
         token = new_token(tenant_id)
@@ -95,12 +98,18 @@ async def request_magic_link(
             )
         )
         await session.flush()
-    await sender.send_magic_link(to=email, token=token)
+    await sender.send_magic_link(to=user.email, token=token)
 
 
 async def login_with_magic_link(
     engine: AsyncEngine, token: str, *, now: datetime | None = None
 ) -> LoginResult:
+    """Consume a link and start a session.
+
+    **POST only.** An email scanner will fetch the link with a GET; consuming it there
+    would use the link up before the reader arrives, so the endpoint must land on a
+    confirmation page and consume on submit. See `docs/features/auth.md`.
+    """
     moment = _now(now)
     tenant_id = tenant_from_token(token)
 
@@ -167,7 +176,7 @@ async def resolve_session(
     moment = _now(now)
     try:
         tenant_id = tenant_from_token(token)
-    except Exception:
+    except InvalidToken:
         return None
 
     async with tenant_session(engine, tenant_id) as session:
