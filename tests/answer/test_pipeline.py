@@ -383,3 +383,25 @@ def test_the_question_is_escaped_so_it_cannot_forge_a_source() -> None:
 
     assert "</question><source" not in user
     assert "&lt;/question&gt;" in user
+
+
+async def test_personal_data_is_redacted_before_the_model_sees_it() -> None:
+    provider = FakeProvider(text=ANSWER)
+    question = "I am ada@example.com, how long can a dead end be?"
+
+    result = await answer_from_sources(question, [source()], provider=provider, judge=FixedJudge())
+
+    sent = provider.calls[0].messages[1].content
+    assert "ada@example.com" not in sent
+    assert "[REDACTED:email]" in sent
+    assert result.answered
+    assert [finding.kind.value for finding in result.redactions] == ["email"]
+
+
+async def test_redaction_does_not_change_what_the_reader_asked() -> None:
+    provider = FakeProvider(text=ANSWER)
+    question = "I am ada@example.com, how long can a dead end be?"
+
+    result = await answer_from_sources(question, [source()], provider=provider, judge=FixedJudge())
+
+    assert result.question == question
