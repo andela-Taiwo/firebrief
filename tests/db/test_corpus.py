@@ -157,7 +157,7 @@ async def test_a_section_cannot_be_updated_or_deleted(owner_engine: AsyncEngine)
 async def test_the_corpus_cannot_be_truncated(owner_engine: AsyncEngine) -> None:
     await _ingest(owner_engine, source())
 
-    for statement in ("truncate table sections", "truncate table documents cascade"):
+    for statement in ("truncate table chunks", "truncate table documents cascade"):
         async with owner_engine.begin() as connection:
             with pytest.raises(DBAPIError, match="cannot be truncated"):
                 await connection.execute(sa.text(statement))
