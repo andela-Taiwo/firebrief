@@ -4,7 +4,7 @@ SHELL := /bin/bash
 UV ?= uv
 export UV_CACHE_DIR ?= $(CURDIR)/.uv-cache
 
-.PHONY: help setup check check-clean canary lint fmt fmt-check types boundaries licenses secrets test eval-retrieval db-migrate db-roundtrip up down docker-smoke clean
+.PHONY: help setup check check-clean canary lint fmt fmt-check types boundaries licenses secrets test eval-retrieval web-install seed api web web-test db-migrate db-roundtrip up down docker-smoke clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | sort \
@@ -44,6 +44,21 @@ check-clean: ## Run make check in a fresh clone (catches untracked-file dependen
 
 canary: ## Break one behaviour and prove a test fails (see docs/RULEBOOK.md)
 	@echo "usage: uv run python scripts/canary.py --file F --old OLD --new NEW --test TEST"
+
+web-install: ## Install the web dependencies (local npm cache: the sandbox home is read-only)
+	cd web && npm install --no-audit --no-fund --cache ./.npm-cache
+
+seed: ## Create the local workspace, user and demonstration corpus
+	$(UV) run python scripts/dev_seed.py
+
+api: ## Run the API locally on http://127.0.0.1:8010
+	$(UV) run uvicorn firebrief.api.dev:app --reload --port 8010
+
+web: ## Run the web UI locally on http://127.0.0.1:5173 (proxies /v1 to :8010)
+	cd web && npm run dev
+
+web-test: ## Type-check and test the web UI
+	cd web && npm run typecheck && npm test
 
 eval-retrieval: ## Recall@3 on the retrieval evaluation set
 	$(UV) run pytest tests/db/test_recall.py -q -s

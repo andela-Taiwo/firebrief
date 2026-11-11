@@ -100,6 +100,71 @@ make help       # list every target
 
 Environment variables for local runs are listed in [`.env.example`](.env.example).
 
+## Run it locally
+
+End to end, from a clean checkout. Two terminals: one for the API, one for the web UI.
+
+```bash
+# 1. Database and cache
+make up                      # Postgres on :55433, Redis on :56380
+
+# 2. Schema and the local workspace
+make db-migrate              # alembic upgrade head
+make seed                    # creates the tenant, the user and a demonstration corpus
+
+# 3. API (terminal one) — http://127.0.0.1:8010
+make api
+
+# 4. Web UI (terminal two) — http://127.0.0.1:5173
+make web-install             # first time only
+make web
+```
+
+Then open the sign-in URL that `make seed` printed:
+
+```
+http://127.0.0.1:5173/sign-in?tenant=018f0000-0000-7000-8000-0000000000aa
+```
+
+Enter any email address that matches the seeded user, `dev@firebrief.local`. There is no
+mail server: the API prints the sign-in link to the terminal where `make api` is running.
+Open it, and you are signed in.
+
+Ask a question such as **"How long can a dead end be?"**. The web UI proxies `/v1` to the
+API, so the `HttpOnly` session cookie works on one origin.
+
+### What the local run actually does
+
+Two parts are deliberately stubbed, and they change what you are looking at:
+
+| Piece | Local default | Consequence |
+|---|---|---|
+| Model provider | `ExtractiveProvider` (no key) | Answers quote the first sentence of the top-ranked source. It cannot reason, so a question about dead ends may quote a different section that shares words. Set `FIREBRIEF_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` for a real model |
+| Support judge | `FixedJudge` | The verifier checks that every quote exists in the source, but not that it supports the claim. The support judge is not built yet |
+
+The rest is real: row-level security, the budget ledger, rate limits, citation offsets and
+refusals all behave as they do in production. The corpus is
+[`config/dev-corpus.html`](config/dev-corpus.html), a four-section demonstration sample, not
+the reviewed GOV.UK corpus — so treat the content of any answer here as a plumbing test.
+
+To use a real model:
+
+```bash
+FIREBRIEF_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-... make api
+```
+
+The database URL defaults to the **runtime role**, `firebrief_app`. The application refuses
+to start as the owner, because a superuser can drop the row-level-security policies; if you
+point `FIREBRIEF_DATABASE_URL` at the owner you will see exactly that error.
+
+### Running the web tests
+
+```bash
+make web-test                # typecheck + Vitest + jest-axe
+cd web && npx playwright install chromium && npm run e2e
+cd web && npm run build      # static pages, sitemap, robots
+```
+
 Other useful targets:
 
 ```bash
