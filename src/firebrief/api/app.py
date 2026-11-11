@@ -17,8 +17,10 @@ import re
 import time
 import uuid
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -76,7 +78,7 @@ def create_app(
             await assert_safe_database_role(connection)
         yield
 
-    app = FastAPI(title="Firebrief", version="0.1.0")
+    app = FastAPI(title="Firebrief", version="0.1.0", lifespan=lifespan)
     app.state.engine = engine
     app.state.embedder = embedder
     app.state.provider = provider
@@ -189,7 +191,7 @@ def create_app(
         request: Request,
         body: AnswerRequest,
         context: AuthContext = Depends(current_session),
-    ) -> AnswerResponse:
+    ) -> AnswerResponse | JSONResponse:
         async with tenant_session(engine, context.tenant_id) as session:
             result = await answer_question(
                 session,
@@ -198,6 +200,7 @@ def create_app(
                 provider=provider,
                 judge=judge,
                 budget=budget,
+                # Teams are not modelled yet, so team limits are the organisation's.
                 scope=BudgetScope(
                     org_id=str(context.tenant_id),
                     team_id=str(context.tenant_id),
@@ -206,9 +209,31 @@ def create_app(
                 # One id across the access log, the response and the audit record.
                 request_id=request.state.request_id,
             )
-        return AnswerResponse.from_result(result)
+        payload = AnswerResponse.from_result(result)
+        status_code = _status_for(result)
+        if status_code != status.HTTP_200_OK:
+            return JSONResponse(payload.model_dump(mode="json"), status_code=status_code)
+        return payload
 
     return app
+
+
+def _status_for(result) -> int:  # type: ignore[no-untyped-def]
+    """A refusal about the answer is a 200; a capacity condition is not."""
+    from firebrief.answer import RefusalReason
+
+    reason = result.refusal.reason if result.refusal is not None else None
+    if reason is RefusalReason.BUDGET_EXHAUSTED:
+        return status.HTTP_429_TOO_MANY_REQUESTS
+    if reason in {RefusalReason.BUDGET_UNAVAILABLE, RefusalReason.MODEL_UNAVAILABLE}:
+        return status.HTTP_503_SERVICE_UNAVAILABLE
+    return status.HTTP_200_OK
+
+
+def _origin(url: str) -> str:
+    """The scheme and host of a URL, so `http://test.evil` cannot match `http://test`."""
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}".lower().rstrip("/")
 
 
 def _client_request_id(request: Request) -> str | None:
@@ -226,18 +251,27 @@ def _origin_refusal(request: Request, settings: Settings) -> str | None:
     if has_body and not request.headers.get("content-type", "").startswith("application/json"):
         return "content type must be application/json"
 
-    allowed = {str(request.base_url).rstrip("/"), *settings.allowed_origins}
+    allowed = {_origin(str(request.base_url))} | {_origin(url) for url in settings.allowed_origins}
     origin = request.headers.get("origin")
     if origin is not None:
-        return None if origin.rstrip("/") in allowed else "origin not allowed"
+        return None if _origin(origin) in allowed else "origin not allowed"
 
     referer = request.headers.get("referer")
     if referer is None:
         return "origin or referer is required"
-    return None if any(referer.startswith(url) for url in allowed) else "origin not allowed"
+    # Compare the parsed origin: a prefix match would accept a lookalike domain.
+    return None if _origin(referer) in allowed else "origin not allowed"
 
 
 def _json(status_code: int, body: dict[str, str], request_id: str):  # type: ignore[no-untyped-def]
     from fastapi.responses import JSONResponse
 
-    return JSONResponse(body, status_code=status_code, headers={"x-request-id": request_id})
+    return JSONResponse(
+        body,
+        status_code=status_code,
+        headers={
+            "x-request-id": request_id,
+            "x-content-type-options": "nosniff",
+            "cache-control": "no-store",
+        },
+    )

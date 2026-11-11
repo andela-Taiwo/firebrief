@@ -322,6 +322,7 @@ async def test_exceeding_the_budget_is_refused_over_http(app_engine, seeded, own
         await http.post("/v1/auth/verify", json={"token": app.state.sender.sent[-1][1]})
         response = await http.post("/v1/answers", json={"question": "How long can a dead end be?"})
 
+    assert response.status_code == 429
     assert response.json()["refusal"]["reason"] == "budget_exhausted"
 
 
@@ -355,3 +356,113 @@ def test_a_judge_is_required(app_engine) -> None:  # type: ignore[no-untyped-def
             budget=make_budget(),
             sender=RecordingEmailSender(),
         )
+
+
+async def test_startup_refuses_a_role_that_can_bypass_rls(owner_engine) -> None:  # type: ignore[no-untyped-def]
+    """The owner is a superuser here; a deployment must not start in that state."""
+    from asgi_lifespan import LifespanManager
+
+    app = make_app(owner_engine)
+
+    with pytest.raises(Exception, match="superuser"):
+        async with LifespanManager(app):
+            pass
+
+
+async def test_a_lookalike_referer_is_refused(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    app = make_app(app_engine)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http:
+        response = await http.post(
+            "/v1/auth/magic-link",
+            json={"tenant_id": TENANT_A, "email": "a@alpha.test"},
+            headers={"referer": "http://test.evil.example/login"},
+        )
+
+    assert response.status_code == 403
+
+
+async def test_a_form_encoded_post_is_refused(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    app = make_app(app_engine)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        response = await http.post(
+            "/v1/auth/magic-link", data={"tenant_id": TENANT_A, "email": "a@alpha.test"}
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "content type must be application/json"
+
+
+async def test_a_middleware_refusal_carries_the_security_headers(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    app = make_app(app_engine)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"origin": "http://evil.test"},
+    ) as http:
+        response = await http.post(
+            "/v1/auth/magic-link", json={"tenant_id": TENANT_A, "email": "a@alpha.test"}
+        )
+
+    assert response.status_code == 403
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-request-id"]
+
+
+async def test_a_refusal_exposes_no_cited_sources_or_quotes(
+    app_engine, seeded, owner_engine
+) -> None:  # type: ignore[no-untyped-def]
+    await _corpus(owner_engine)
+    app = make_app(
+        app_engine,
+        provider=FakeProvider(
+            text='Dead ends are ten metres: "Dead ends must be limited to ten metres." [1]'
+        ),
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        await http.post(
+            "/v1/auth/magic-link", json={"tenant_id": TENANT_A, "email": "a@alpha.test"}
+        )
+        await http.post("/v1/auth/verify", json={"token": app.state.sender.sent[-1][1]})
+        body = (
+            await http.post("/v1/answers", json={"question": "How long can a dead end be?"})
+        ).json()
+
+    assert body["answer"] is None
+    assert body["sources"], "the evidence considered is still listed"
+    assert not any(source["cited"] for source in body["sources"])
+    assert all(source["quotes"] == [] for source in body["sources"])
+
+
+async def test_a_partly_verified_refusal_still_exposes_no_quotes(
+    app_engine, seeded, owner_engine
+) -> None:  # type: ignore[no-untyped-def]
+    """One good quote and one bad claim: the answer is withheld, so nothing is highlighted."""
+    await _corpus(owner_engine)
+    app = make_app(
+        app_engine,
+        provider=FakeProvider(
+            text=(
+                f'Dead ends are capped: "{DEAD_ENDS}" [1] '
+                'and doors are ten metres: "Doors must be ten metres wide." [1]'
+            )
+        ),
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        await http.post(
+            "/v1/auth/magic-link", json={"tenant_id": TENANT_A, "email": "a@alpha.test"}
+        )
+        await http.post("/v1/auth/verify", json={"token": app.state.sender.sent[-1][1]})
+        body = (
+            await http.post("/v1/answers", json={"question": "How long can a dead end be?"})
+        ).json()
+
+    assert body["answer"] is None
+    assert not any(source["cited"] for source in body["sources"])
+    assert all(source["quotes"] == [] for source in body["sources"])

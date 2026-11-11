@@ -66,7 +66,8 @@ class AnswerResponse(BaseModel):
 
     @classmethod
     def from_result(cls, result: AnswerResult) -> AnswerResponse:
-        verified = _verified_quotes(result)
+        # A withheld answer must not show quotes beside `answer: null`.
+        verified = _verified_quotes(result) if result.answered else ()
         return cls(
             request_id=result.request_id,
             answer=result.answer,

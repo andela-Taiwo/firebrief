@@ -102,3 +102,25 @@ body; drop `HttpOnly`.
 Rate limiting, per the review: magic links per address and per IP, answers per user. It is
 the last documented hole before a public demo, and building it before the UI means the UI
 can show "limit reached" from the start.
+
+
+## Re-review 2 responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| **Must** | The startup role check never ran: the lifespan was defined and not passed | `FastAPI(..., lifespan=lifespan)`. A test starts the app against the owner role with `LifespanManager` and asserts startup fails |
+| **Must** | A lookalike Referer passed the prefix check | Origins are parsed and compared by scheme and host, so `http://test.evil.example` cannot match `http://test` |
+| Should | A withheld answer still exposed quotes | Cited flags and quotes are only produced when the answer is shown; a test uses an answer with one verified and one fabricated claim |
+| Should | Behind a proxy, `base_url` is not the browser's origin | Recorded in the deployment notes: set `allowed_origins`, or run uvicorn with `--proxy-headers` and trusted proxy IPs |
+| Should | Middleware 403s missed the security headers | Set in the refusal helper too, tested |
+| Decision | Capacity refusals as 200 | Changed: `429` for an exhausted budget, `503` for an unavailable model or ledger, `200` for a refusal about the answer. Recorded in ADR 0009 |
+| Decision | Teams are not modelled | Comment in the route: team limits are the organisation's for now |
+| Decision | The model name is hard-coded | Still open from #8, and still recorded as open |
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C85 | The lifespan is not installed | startup-refused test |
+| C86 | Referer matched by prefix | lookalike-domain test |
+| C87 | Quotes shown on a withheld answer | partly-verified refusal test |
