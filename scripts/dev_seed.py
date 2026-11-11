@@ -13,6 +13,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import sqlalchemy as sa
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from firebrief.api.dev import DEV_EMAIL, DEV_TENANT, DEV_USER
@@ -26,10 +27,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def owner_url() -> str:
     """Seeding creates a tenant, which is a privileged onboarding action."""
-    return os.environ.get(
+    url = os.environ.get(
         "FIREBRIEF_OWNER_DATABASE_URL",
-        "postgresql+asyncpg://firebrief:firebrief_dev@127.0.0.1:55433/firebrief_test",
+        "postgresql+asyncpg://firebrief:firebrief_dev@127.0.0.1:55433/firebrief_dev",
     )
+    database = make_url(url).database or ""
+    if database.endswith("_test"):
+        raise SystemExit(
+            "refusing to seed a *_test database: the tests truncate it. Use firebrief_dev."
+        )
+    return url
 
 
 CORPUS = ROOT / "config" / "dev-corpus.html"

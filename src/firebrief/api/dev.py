@@ -17,6 +17,7 @@ import logging
 import os
 
 import httpx
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from firebrief.answer.judge import FixedJudge
@@ -63,10 +64,19 @@ def database_url() -> str:
     The application refuses to start as the owner: a superuser can drop or replace the
     row-level-security policies, so the tenant isolation would not hold.
     """
-    return os.environ.get(
+    url = os.environ.get(
         "FIREBRIEF_DATABASE_URL",
-        "postgresql+asyncpg://firebrief_app:firebrief_app_dev@127.0.0.1:55433/firebrief_test",
+        "postgresql+asyncpg://firebrief_app:firebrief_app_dev@127.0.0.1:55433/firebrief_dev",
     )
+    # The test suite truncates its database between tests. Sharing it with the dev server
+    # means every `make check` silently deletes the workspace you are signed into.
+    database = make_url(url).database or ""
+    if database.endswith("_test"):
+        raise SystemExit(
+            "refusing to run the development server against a *_test database: "
+            "the tests truncate it. Use firebrief_dev (see `make dev-setup`)."
+        )
+    return url
 
 
 def build_provider() -> Provider:

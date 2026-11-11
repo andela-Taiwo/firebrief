@@ -7,7 +7,11 @@ function withMarkerLinks(answer: string, sources: Source[]) {
   const parts = answer.split(/(\[\d+\])/g);
   return parts.map((part, index) => {
     const match = /^\[(\d+)\]$/.exec(part);
-    if (!match) return <span key={index}>{part}</span>;
+    if (!match) {
+      // A trailing space becomes a non-breaking one, so `[1]` cannot wrap onto its own line.
+      const text = part.endsWith(" ") ? `${part.slice(0, -1)}\u00a0` : part;
+      return <span key={index}>{text}</span>;
+    }
     const marker = Number(match[1]);
     const source = sources.find((item) => item.n === marker);
     return (

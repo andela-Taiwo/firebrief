@@ -284,3 +284,12 @@ ring" were checked as *values*, not as rendered pixels, until this check existed
 - The dark scheme is contrast-checked but not visually reviewed.
 - `VITE_API_BASE` cross-origin mode requires the CSP `connect-src` to be widened, which the
   meta tag cannot do per-environment; the server header should carry it.
+
+## Correction: the local run shared a database with the tests
+
+`make check` truncates `firebrief_test` between tests. The development server was pointed
+at the same database, so running the test suite deleted the seeded workspace: sign-in then
+returned `202` and sent nothing (no user matched), and the link could not be verified.
+
+Development now uses **`firebrief_dev`**, created and migrated by `make dev-setup`, and the
+dev server refuses to start when the database name ends in `_test`.

@@ -3,14 +3,22 @@ import { sourceHref } from "../lib/format";
 import { VisuallyHidden } from "./VisuallyHidden";
 import styles from "./SourceList.module.css";
 
+function leaf(heading: string): string {
+  return heading.split(" > ").pop() ?? heading;
+}
+
 export function SourceList({ sources }: { sources: Source[] }) {
   if (sources.length === 0) return null;
+  const cited = sources.filter((source) => source.cited);
+  const considered = sources.filter((source) => !source.cited);
 
   return (
     <section aria-labelledby="sources-heading" className={styles.section}>
-      <h2 id="sources-heading">Sources</h2>
+      <h2 id="sources-heading">
+        {cited.length > 0 ? "Quoted in this answer" : "Sources"}
+      </h2>
       <ol className={styles.list}>
-        {sources.map((source) => {
+        {cited.map((source) => {
           const passage = source.quotes[0]?.text;
           return (
             <li key={source.n} id={`source-${source.n}`} className={styles.item}>
@@ -21,9 +29,8 @@ export function SourceList({ sources }: { sources: Source[] }) {
                 {source.title}
               </h3>
               <p className={styles.meta}>
-                {source.heading} · Edition {source.edition}
-                {source.cited ? "" : " · Considered, not quoted"}
-                <VisuallyHidden>. {source.cited ? "Quoted in the answer" : "Not quoted in the answer"}</VisuallyHidden>
+                {leaf(source.heading)} · Edition {source.edition}
+                <VisuallyHidden>. This source is quoted in the answer.</VisuallyHidden>
               </p>
               {source.quotes.map((quote) => (
                 <blockquote key={`${source.n}-${quote.marker}-${quote.start}`} className={styles.quote}>
@@ -48,6 +55,30 @@ export function SourceList({ sources }: { sources: Source[] }) {
           );
         })}
       </ol>
+
+      {considered.length > 0 ? (
+        <details className={styles.more}>
+          <summary>
+            Also considered ({considered.length})
+            <VisuallyHidden>. Sources we read but did not quote.</VisuallyHidden>
+          </summary>
+          <ul className={styles.list}>
+            {considered.map((source) => (
+              <li key={source.n} id={`source-${source.n}`} className={styles.item}>
+                <p className={styles.title}>
+                  <span className={styles.number} aria-hidden="true">
+                    [{source.n}]
+                  </span>{" "}
+                  {source.title}
+                </p>
+                <p className={styles.meta}>
+                  {leaf(source.heading)} · Edition {source.edition}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
     </section>
   );
 }

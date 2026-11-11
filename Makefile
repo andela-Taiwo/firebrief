@@ -4,7 +4,7 @@ SHELL := /bin/bash
 UV ?= uv
 export UV_CACHE_DIR ?= $(CURDIR)/.uv-cache
 
-.PHONY: help setup check check-clean canary lint fmt fmt-check types boundaries licenses secrets test eval-retrieval web-install seed api web web-test db-migrate db-roundtrip up down docker-smoke clean
+.PHONY: help setup check check-clean canary lint fmt fmt-check types boundaries licenses secrets test eval-retrieval web-install dev-setup seed api web web-test db-migrate db-roundtrip up down docker-smoke clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | sort \
@@ -48,7 +48,13 @@ canary: ## Break one behaviour and prove a test fails (see docs/RULEBOOK.md)
 web-install: ## Install the web dependencies (local npm cache: the sandbox home is read-only)
 	cd web && npm install --no-audit --no-fund --cache ./.npm-cache
 
-seed: ## Create the local workspace, user and demonstration corpus
+DEV_DATABASE_URL ?= postgresql+asyncpg://firebrief:firebrief_dev@127.0.0.1:55433/firebrief_dev
+
+dev-setup: ## Migrate and seed the local development database (never the test one)
+	DATABASE_URL=$(DEV_DATABASE_URL) $(UV) run alembic upgrade head
+	$(UV) run python scripts/dev_seed.py
+
+seed: ## Re-create the local workspace, user and demonstration corpus
 	$(UV) run python scripts/dev_seed.py
 
 api: ## Run the API locally on http://127.0.0.1:8010

@@ -29,7 +29,7 @@ test("asks a question, shows a verified answer and scans it", async ({ page }) =
   await page.getByLabel(/your question/i).fill("How long can a dead end be?");
   await page.getByRole("button", { name: /^ask$/i }).click();
 
-  await expect(page.getByRole("heading", { name: "Answer" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Answer", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: /source 1: fire safety in flats/i })).toBeVisible();
   await expect(page.getByText(/we removed 1 email address/i)).toBeVisible();
 

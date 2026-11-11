@@ -117,9 +117,8 @@ End to end, from a clean checkout. Two terminals: one for the API, one for the w
 # 1. Database and cache
 make up                      # Postgres on :55433, Redis on :56380
 
-# 2. Schema and the local workspace
-make db-migrate              # alembic upgrade head
-make seed                    # creates the tenant, the user and a demonstration corpus
+# 2. Database and workspace (creates firebrief_dev, migrates it, seeds it)
+make dev-setup
 
 # 3. API (terminal one) — http://127.0.0.1:8010
 make api
@@ -165,6 +164,10 @@ FIREBRIEF_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-... make api
 The database URL defaults to the **runtime role**, `firebrief_app`. The application refuses
 to start as the owner, because a superuser can drop the row-level-security policies; if you
 point `FIREBRIEF_DATABASE_URL` at the owner you will see exactly that error.
+
+Development runs against `firebrief_dev`. The test suite runs against `firebrief_test` and
+**truncates it between tests**, so the dev server refuses to start on a `*_test` database:
+otherwise every `make check` would quietly delete the workspace you are signed into.
 
 ### Running the web tests
 
