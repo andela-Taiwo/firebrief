@@ -45,3 +45,30 @@ test("sign-in page is keyboard reachable and clean", async ({ page }) => {
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
 });
+
+test("the stylesheet actually applies in the browser", async ({ page }) => {
+  // The CSP once blocked Vite's inline styles: the page rendered, but unstyled. Axe does
+  // not catch that, so assert the cascade directly.
+  await page.goto("/sign-in?tenant=018f0000-0000-7000-8000-000000000001");
+
+  const applied = await page.evaluate(() => ({
+    sheets: document.styleSheets.length,
+    font: getComputedStyle(document.body).fontFamily,
+    margin: getComputedStyle(document.body).margin,
+    headingSize: getComputedStyle(document.querySelector("h1")!).fontSize,
+  }));
+
+  expect(applied.sheets).toBeGreaterThan(0);
+  expect(applied.font).not.toContain("Times");
+  expect(applied.margin).toBe("0px");
+  expect(applied.headingSize).toBe("30px");
+});
+
+test("an enabled primary button is the accent colour, not the disabled grey", async ({ page }) => {
+  await page.goto("/sign-in?tenant=018f0000-0000-7000-8000-000000000001");
+  await page.getByLabel("Email address").fill("dev@firebrief.local");
+
+  const button = page.getByRole("button", { name: /email me a sign-in link/i });
+  await expect(button).toBeEnabled();
+  await expect(button).toHaveCSS("background-color", "rgb(11, 92, 173)");
+});

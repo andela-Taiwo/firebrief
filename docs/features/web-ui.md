@@ -254,6 +254,29 @@ no web font, no third-party script. The system font stack keeps the CSP at `defa
 | App routes noindex | **Partial** | `dist/app.html` carries `<meta name="robots" content="noindex">`. The `X-Robots-Tag` header and the app-route rewrite are server configuration and are **not** in this repo yet — documented in `web/README.md` |
 | Core Web Vitals | **Not verified** | Lighthouse CI is configured with budgets (LCP 2.5s, CLS 0.1, TBT 200ms, performance ≥ 0.95) but could not run here: Chrome launched and its DevTools endpoint was unreachable in this sandbox. The static pages ship no JavaScript, which is the main reason to expect a good LCP, but expectation is not measurement |
 
+## Correction after a browser check
+
+The first self-review said the styling had been reviewed. It had not: the app rendered
+**with no CSS at all**, and axe passed anyway because axe does not check whether a
+stylesheet applied.
+
+Two causes, both now fixed and pinned by a test:
+
+1. `style-src 'self'` in a `<meta>` CSP blocks the inline `<style>` tags Vite injects in
+   development. Measured: 16 blocked style tags, `document.styleSheets.length === 0`, body
+   font `Times`. The CSP is now injected **at build time only** (a Vite plugin with
+   `apply: "build"`), so development is unstyled-no-more and production stays strict.
+   `frame-ancestors` was also removed from the meta: browsers ignore it there and it belongs
+   in the server header.
+2. An enabled primary button showed white text on the disabled grey for 120ms, because
+   `background-color` had a transition and the label colour did not. The transition is gone.
+
+Both are now asserted in a real browser (`e2e/ask.spec.ts`): the stylesheet count, the body
+font, the `h1` size, and the enabled button's background colour.
+
+The accessibility table above should be read with that correction: "contrast" and "focus
+ring" were checked as *values*, not as rendered pixels, until this check existed.
+
 ### Known gaps
 
 - 200% zoom and a screen-reader pass are unverified, as above.

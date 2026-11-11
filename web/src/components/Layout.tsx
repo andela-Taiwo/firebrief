@@ -25,7 +25,7 @@ export function Layout({ children, signedIn }: { children: ReactNode; signedIn?:
           Firebrief
         </Link>
         <nav aria-label="Account">
-          {signedIn ? (
+          {location.pathname.startsWith("/sign-in") ? null : signedIn ? (
             <Button variant="quiet" onClick={signOut}>
               Sign out
             </Button>

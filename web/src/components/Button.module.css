@@ -6,12 +6,13 @@
   min-height: 44px;
   cursor: pointer;
   border: 2px solid transparent;
-  transition: background-color 120ms ease;
 }
 
 .button:disabled {
   cursor: not-allowed;
-  opacity: 0.6;
+  background: var(--surface);
+  color: var(--muted);
+  border-color: var(--border-soft);
 }
 
 .primary {

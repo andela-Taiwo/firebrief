@@ -34,6 +34,8 @@ The meta tag plus the header is the enforceable pair.
 
 ## Security
 
-The CSP is a `<meta http-equiv>` tag: `default-src 'self'`, no third-party scripts, styles or
-fonts. The system font stack means no font request at all. Serve the real header from the
+The CSP is injected into the built HTML only (`vite.config.ts`, `cspOnBuild`). Delivering
+`style-src 'self'` in development blocks the inline `<style>` tags Vite injects, which
+leaves the app unstyled; `e2e/ask.spec.ts` asserts the cascade still applies. Policy:
+`default-src 'self'`, no third-party scripts, styles or fonts. The system font stack means no font request at all. Serve the real header from the
 server as well; a meta tag cannot express `frame-ancestors` reliably in every browser.
