@@ -25,6 +25,7 @@ from firebrief.ingest import SourceDocument, ingest
 from firebrief.ingest.embed import BagOfWordsEmbedder
 from firebrief.ingest.store_embed import embed_version
 from firebrief.llm import FakeProvider, Provider
+from firebrief.ratelimit import InMemoryLimiter, Limiter
 from tests.db.data import RETRIEVAL_HTML, TENANT_A, USER_A
 
 
@@ -72,6 +73,7 @@ def app(app_engine: AsyncEngine):
         provider=FakeProvider(text=f'The limit is thirty metres: "{DEAD_ENDS}" [1]'),
         judge=FixedJudge(),
         budget=make_budget(),
+        limiter=InMemoryLimiter(),
         sender=RecordingEmailSender(),
         settings=Settings(cookie_secure=False, allowed_origins=("http://test",)),
     )
@@ -203,6 +205,7 @@ def make_app(
     *,
     provider: Provider | None = None,
     budget: BudgetService | None = None,
+    limiter: Limiter | None = None,
     settings: Settings | None = None,
 ) -> FastAPI:
     return create_app(
@@ -211,6 +214,7 @@ def make_app(
         provider=provider or FakeProvider(text=f'The limit is thirty metres: "{DEAD_ENDS}" [1]'),
         judge=FixedJudge(),
         budget=budget or make_budget(),
+        limiter=limiter or InMemoryLimiter(),
         sender=RecordingEmailSender(),
         settings=settings or Settings(cookie_secure=False),
     )
@@ -354,6 +358,7 @@ def test_a_judge_is_required(app_engine) -> None:  # type: ignore[no-untyped-def
             embedder=BagOfWordsEmbedder(),
             provider=FakeProvider(),
             budget=make_budget(),
+            limiter=InMemoryLimiter(),
             sender=RecordingEmailSender(),
         )
 
@@ -466,3 +471,222 @@ async def test_a_partly_verified_refusal_still_exposes_no_quotes(
     assert body["answer"] is None
     assert not any(source["cited"] for source in body["sources"])
     assert all(source["quotes"] == [] for source in body["sources"])
+
+
+async def test_too_many_link_requests_for_one_address_is_refused(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    app = make_app(app_engine, settings=Settings(link_email_limit=2, link_ip_limit=100))
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        payload = {"tenant_id": TENANT_A, "email": "a@alpha.test"}
+        assert (await http.post("/v1/auth/magic-link", json=payload)).status_code == 202
+        assert (await http.post("/v1/auth/magic-link", json=payload)).status_code == 202
+        refused = await http.post("/v1/auth/magic-link", json=payload)
+
+    assert refused.status_code == 429
+    assert int(refused.headers["retry-after"]) >= 1
+    assert refused.json()["detail"] == "too many requests"
+
+
+async def test_too_many_link_requests_from_one_ip_is_refused(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    app = make_app(app_engine, settings=Settings(link_email_limit=100, link_ip_limit=2))
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        for index in range(2):
+            payload = {"tenant_id": TENANT_A, "email": f"user{index}@alpha.test"}
+            assert (await http.post("/v1/auth/magic-link", json=payload)).status_code == 202
+        refused = await http.post(
+            "/v1/auth/magic-link", json={"tenant_id": TENANT_A, "email": "third@alpha.test"}
+        )
+
+    assert refused.status_code == 429
+
+
+async def test_answers_are_limited_per_user(app_engine, seeded, owner_engine) -> None:  # type: ignore[no-untyped-def]
+    await _corpus(owner_engine)
+    app = make_app(app_engine, settings=Settings(answer_user_limit=1, cookie_secure=False))
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        await http.post(
+            "/v1/auth/magic-link", json={"tenant_id": TENANT_A, "email": "a@alpha.test"}
+        )
+        await http.post("/v1/auth/verify", json={"token": app.state.sender.sent[-1][1]})
+        first = await http.post("/v1/answers", json={"question": "How long can a dead end be?"})
+        second = await http.post("/v1/answers", json={"question": "How long can a dead end be?"})
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+
+
+async def test_an_unavailable_limiter_refuses_rather_than_allowing(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    class Broken:
+        async def check(self, key, limit):  # type: ignore[no-untyped-def]
+            raise RuntimeError("redis down")
+
+    app = make_app(app_engine, limiter=Broken())
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        response = await http.post(
+            "/v1/auth/magic-link", json={"tenant_id": TENANT_A, "email": "a@alpha.test"}
+        )
+
+    assert response.status_code == 503
+
+
+async def test_a_spoofed_forwarded_for_does_not_choose_the_bucket(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    """Only the rightmost hop is trusted; the leftmost is whatever the caller typed."""
+    app = make_app(
+        app_engine,
+        settings=Settings(
+            link_ip_limit=1, link_email_limit=100, trusted_proxy_hops=1, cookie_secure=False
+        ),
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        payload = {"tenant_id": TENANT_A, "email": "a@alpha.test"}
+        first = await http.post(
+            "/v1/auth/magic-link", json=payload, headers={"x-forwarded-for": "1.1.1.1, 9.9.9.9"}
+        )
+        spoofed = await http.post(
+            "/v1/auth/magic-link", json=payload, headers={"x-forwarded-for": "2.2.2.2, 9.9.9.9"}
+        )
+
+    assert first.status_code == 202
+    assert spoofed.status_code == 429, "rotating the client-supplied entry must not help"
+
+
+async def test_a_refused_ip_does_not_consume_the_address_quota(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    app = make_app(
+        app_engine,
+        settings=Settings(
+            link_ip_limit=1, link_email_limit=2, trusted_proxy_hops=1, cookie_secure=False
+        ),
+    )
+    payload = {"tenant_id": TENANT_A, "email": "a@alpha.test"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        first = await http.post(
+            "/v1/auth/magic-link", json=payload, headers={"x-forwarded-for": "1.1.1.1"}
+        )
+        blocked = await http.post(
+            "/v1/auth/magic-link", json=payload, headers={"x-forwarded-for": "1.1.1.1"}
+        )
+        other_ip = await http.post(
+            "/v1/auth/magic-link", json=payload, headers={"x-forwarded-for": "2.2.2.2"}
+        )
+        exhausted = await http.post(
+            "/v1/auth/magic-link", json=payload, headers={"x-forwarded-for": "3.3.3.3"}
+        )
+
+    assert first.status_code == 202
+    assert blocked.status_code == 429
+    assert other_ip.status_code == 202, "the blocked request must not have spent the address quota"
+    assert exhausted.status_code == 429
+
+
+async def test_production_refuses_to_start_without_a_proxy_setup(app_engine) -> None:  # type: ignore[no-untyped-def]
+    from asgi_lifespan import LifespanManager
+
+    app = make_app(app_engine, settings=Settings(environment="production", cookie_secure=True))
+
+    with pytest.raises(RuntimeError, match="trusted_proxy_hops"):
+        async with LifespanManager(app):
+            pass
+
+
+async def test_allowed_requests_report_the_remaining_budget(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    app = make_app(app_engine, settings=Settings(link_email_limit=2, cookie_secure=False))
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        response = await http.post(
+            "/v1/auth/magic-link", json={"tenant_id": TENANT_A, "email": "a@alpha.test"}
+        )
+
+    assert response.headers["ratelimit-limit"] == "2"
+    assert response.headers["ratelimit-remaining"] == "1"
+    assert int(response.headers["ratelimit-reset"]) > 0
+
+
+def test_an_unknown_environment_fails_validation() -> None:
+    """A typo must fail loudly, not silently disable the production checks."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Settings(environment="prod")  # type: ignore[arg-type]
+
+
+async def test_ipv6_addresses_in_one_slash_64_share_a_bucket(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    app = make_app(
+        app_engine,
+        settings=Settings(
+            link_ip_limit=1, link_email_limit=100, trusted_proxy_hops=1, cookie_secure=False
+        ),
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        payload = {"tenant_id": TENANT_A, "email": "a@alpha.test"}
+        first = await http.post(
+            "/v1/auth/magic-link", json=payload, headers={"x-forwarded-for": "2001:db8:0:1::1"}
+        )
+        same_64 = await http.post(
+            "/v1/auth/magic-link", json=payload, headers={"x-forwarded-for": "2001:db8:0:1::2"}
+        )
+        other_64 = await http.post(
+            "/v1/auth/magic-link", json=payload, headers={"x-forwarded-for": "2001:db8:0:2::1"}
+        )
+
+    assert first.status_code == 202
+    assert same_64.status_code == 429, "one /64 is one user"
+    assert other_64.status_code == 202
+
+
+async def test_a_refusal_carries_the_rate_limit_headers(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    app = make_app(app_engine, settings=Settings(link_email_limit=1, cookie_secure=False))
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        payload = {"tenant_id": TENANT_A, "email": "a@alpha.test"}
+        await http.post("/v1/auth/magic-link", json=payload)
+        refused = await http.post("/v1/auth/magic-link", json=payload)
+
+    assert refused.status_code == 429
+    assert refused.headers["ratelimit-remaining"] == "0"
+    assert int(refused.headers["retry-after"]) >= 1
+
+
+async def test_the_tighter_of_two_limits_sets_the_headers(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    app = make_app(
+        app_engine, settings=Settings(link_email_limit=20, link_ip_limit=2, cookie_secure=False)
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        response = await http.post(
+            "/v1/auth/magic-link", json={"tenant_id": TENANT_A, "email": "a@alpha.test"}
+        )
+
+    assert response.headers["ratelimit-limit"] == "2"
+    assert response.headers["ratelimit-remaining"] == "1"
+
+
+async def test_production_requires_a_long_secret(app_engine) -> None:  # type: ignore[no-untyped-def]
+    from asgi_lifespan import LifespanManager
+
+    app = make_app(
+        app_engine,
+        settings=Settings(
+            environment="production", trusted_proxy_hops=1, rate_limit_secret="short"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="32 characters"):
+        async with LifespanManager(app):
+            pass
