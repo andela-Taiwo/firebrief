@@ -11,4 +11,11 @@ class Settings(BaseSettings):
     session_cookie: str = "firebrief_session"
     cookie_secure: bool = True
     allowed_origins: tuple[str, ...] = ()
+    link_email_limit: int = 5
+    link_ip_limit: int = 20
+    link_window_seconds: int = 900
+    answer_user_limit: int = 60
+    answer_window_seconds: int = 3600
+    trust_forwarded_for: bool = False
+    """Only true behind a proxy that overwrites `X-Forwarded-For`."""
     """Extra origins allowed to POST with a session cookie, beyond the request's own."""

@@ -52,6 +52,7 @@ from firebrief.db.roles import assert_safe_database_role
 from firebrief.db.session import tenant_session
 from firebrief.ingest.embed import Embedder
 from firebrief.llm import Provider
+from firebrief.ratelimit import Limit, Limiter, key_for
 
 logger = logging.getLogger("firebrief.api")
 
@@ -66,6 +67,7 @@ def create_app(
     provider: Provider,
     judge: SupportJudge,
     budget: BudgetService,
+    limiter: Limiter,
     sender: EmailSender,
     settings: Settings | None = None,
 ) -> FastAPI:
@@ -84,6 +86,7 @@ def create_app(
     app.state.provider = provider
     app.state.judge = judge
     app.state.budget = budget
+    app.state.limiter = limiter
     app.state.sender = sender
     app.state.settings = settings
     app.state.cookie_name = (
@@ -145,7 +148,22 @@ def create_app(
         return {"status": "ready"}
 
     @app.post("/v1/auth/magic-link", status_code=status.HTTP_202_ACCEPTED)
-    async def magic_link(body: MagicLinkRequest) -> dict[str, str]:
+    async def magic_link(body: MagicLinkRequest, request: Request) -> object:
+        limited = await _enforce(
+            limiter,
+            key_for("link:email", body.email),
+            Limit(settings.link_email_limit, settings.link_window_seconds),
+        )
+        if limited is not None:
+            return limited
+        limited = await _enforce(
+            limiter,
+            key_for("link:ip", _client_ip(request, settings)),
+            Limit(settings.link_ip_limit, settings.link_window_seconds),
+        )
+        if limited is not None:
+            return limited
+
         await request_magic_link(engine, tenant_id=body.tenant_id, email=body.email, sender=sender)
         # The same answer whether or not the address exists.
         return {"status": "sent"}
@@ -192,6 +210,14 @@ def create_app(
         body: AnswerRequest,
         context: AuthContext = Depends(current_session),
     ) -> AnswerResponse | JSONResponse:
+        limited = await _enforce(
+            limiter,
+            key_for("answer:user", f"{context.tenant_id}:{context.user_id}"),
+            Limit(settings.answer_user_limit, settings.answer_window_seconds),
+        )
+        if limited is not None:
+            return limited
+
         async with tenant_session(engine, context.tenant_id) as session:
             result = await answer_question(
                 session,
@@ -216,6 +242,33 @@ def create_app(
         return payload
 
     return app
+
+
+async def _enforce(limiter: Limiter, key: str, limit: Limit) -> JSONResponse | None:
+    """A limiter that cannot answer must not let traffic through (ADR 0007)."""
+    try:
+        decision = await limiter.check(key, limit)
+    except Exception as exc:
+        logger.warning("rate limiter unavailable: %s", type(exc).__name__)
+        return JSONResponse(
+            {"detail": "rate limiting unavailable"},
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    if decision.allowed:
+        return None
+    return JSONResponse(
+        {"detail": "too many requests"},
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        headers={"retry-after": str(decision.retry_after_seconds)},
+    )
+
+
+def _client_ip(request: Request, settings: Settings) -> str:
+    if settings.trust_forwarded_for:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 def _status_for(result) -> int:  # type: ignore[no-untyped-def]

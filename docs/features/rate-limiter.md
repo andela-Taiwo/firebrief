@@ -1,0 +1,67 @@
+# rate-limiter: bound the two things worth abusing
+
+**Status:** In progress · **Branch:** `feat/rate-limiter`
+**Depends on:** `api-hardening` · **Unblocks:** a public demo
+
+## Goal
+
+Magic links cannot be used to bomb an address or a host, and answers cannot be run without
+limit by one account. Three limits, checked before the expensive thing happens.
+
+## Limits
+
+| Scope | Key | Default | Window |
+|---|---|---|---|
+| Magic links per address | `rl:link:email:<sha256(normalised email)>` | 5 | 15 min |
+| Magic links per IP | `rl:link:ip:<sha256(ip)>` | 20 | 15 min |
+| Answers per user | `rl:answer:user:<sha256(tenant:user)>` | 60 | 1 h |
+
+## Decisions & trade-offs
+
+### D1. Hashed keys
+The limiter store should not become a directory of every email address and IP that tried to
+log in. Keys are SHA-256 of the normalised value; the store cannot be reversed into a
+mailing list.
+
+### D2. Fail closed
+If Redis is unreachable, the request is refused with `503` rather than allowed. This matches
+ADR 0007: a control that silently stops applying during an outage is not a control, and the
+outage is exactly when abuse would go unnoticed.
+
+### D3. The window is approximate
+The Redis implementation is a sorted set read then written in separate commands, so two
+concurrent requests can both be allowed at the boundary. For abuse protection that overshoot
+is acceptable; making it exact needs a Lua script, which is not worth the complexity until
+overshoot is shown to matter.
+
+### D4. The limiter is injected
+`create_app` requires a `Limiter`, like the judge and the budget. Tests use the in-memory
+implementation; deployment uses Redis. Neither is a default.
+
+## Acceptance criteria
+
+1. The sixth link request for one address in the window is `429` with `Retry-After`.
+2. Requests from one IP are limited across different addresses.
+3. The 61st answer in an hour for one user is `429`.
+4. Keys contain no address, IP or user id.
+5. A limiter that raises produces `503`, not a pass.
+6. The window slides: an event older than the window no longer counts.
+
+## Test plan
+
+The in-memory limiter is tested with a fake clock for window behaviour. The Redis limiter is
+tested against `fakeredis`. The API tests assert `429`, `Retry-After`, and `503` on outage.
+
+Canaries: skip the magic-link check; store keys in clear; fail open on an outage.
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| A shared IP (office, carrier NAT) blocks innocent users | The per-IP limit is 4× the per-address limit, and both are configurable |
+| A user past their limit has no path forward | `Retry-After` is sent so the UI can say when |
+| Redis becomes a hard dependency of login | It already was for the budget's fast path; fail-closed is the recorded choice |
+
+## Effort
+
+2 dev-days, one PR.
