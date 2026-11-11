@@ -16,3 +16,6 @@ evals/**/out/
 .hypothesis/
 .import_linter_cache/
 .docker/
+
+# local dev server logs and pid files
+.run/

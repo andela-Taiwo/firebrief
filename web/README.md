@@ -5,6 +5,7 @@ Vite + React + TypeScript. Plain CSS modules, no UI library.
 ```bash
 npm install --cache ./.npm-cache   # the sandbox's npm cache is not writable
 npm run dev                        # http://127.0.0.1:5173, proxies /v1 to :8010
+                                   # prefer `make start` / `make stop` from the repo root
                                    # (the API must be running: make api)
 npm test                           # Vitest + Testing Library + jest-axe
 npm run build                      # typecheck, client build, static pages, sitemap

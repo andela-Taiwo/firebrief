@@ -153,6 +153,26 @@ logged, because whether delivery failed must not reveal whether an address exist
 Ask a question such as **"How long can a dead end be?"**. The web UI proxies `/v1` to the
 API, so the `HttpOnly` session cookie works on one origin.
 
+### Starting, stopping and reloading
+
+Instead of two terminals, `make start` runs both servers in the background and writes their
+pids and logs to `.run/`:
+
+```bash
+make start     # api on :8010, web on :5173, logs in .run/
+make status    # are they running?
+make logs      # follow both logs
+make restart   # after changing .env, dependencies or the proxy config
+make stop      # shut both down
+```
+
+Both servers watch their own files, so editing Python or React code reloads without a
+restart. `make restart` is for the things a watcher cannot pick up: environment variables,
+`uv sync`, `npm install`, or a change to `vite.config.ts`.
+
+`make stop` stops the app servers only. Postgres and Redis are Docker services and belong to
+`make down` (which also deletes their volumes).
+
 ### What the local run actually does
 
 Two parts are deliberately stubbed, and they change what you are looking at:

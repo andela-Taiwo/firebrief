@@ -4,7 +4,7 @@ SHELL := /bin/bash
 UV ?= uv
 export UV_CACHE_DIR ?= $(CURDIR)/.uv-cache
 
-.PHONY: help setup check check-clean canary lint fmt fmt-check types boundaries licenses secrets test eval-retrieval web-install dev-setup seed api web web-test db-migrate db-roundtrip up down docker-smoke clean
+.PHONY: help setup check check-clean canary lint fmt fmt-check types boundaries licenses secrets test eval-retrieval web-install dev-setup seed start stop restart status logs api web web-test db-migrate db-roundtrip up down docker-smoke clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | sort \
@@ -56,6 +56,21 @@ dev-setup: ## Migrate and seed the local development database (never the test on
 
 seed: ## Re-create the local workspace, user and demonstration corpus
 	$(UV) run python scripts/dev_seed.py
+
+start: ## Start the API and web UI in the background
+	./scripts/dev.sh start
+
+stop: ## Stop the API and web UI
+	./scripts/dev.sh stop
+
+restart: ## Restart the API and web UI (after a config or dependency change)
+	./scripts/dev.sh restart
+
+status: ## Show whether the API and web UI are running
+	./scripts/dev.sh status
+
+logs: ## Follow both dev server logs
+	./scripts/dev.sh logs
 
 api: ## Run the API locally on http://127.0.0.1:8010
 	$(UV) run uvicorn firebrief.api.dev:app --reload --port 8010
