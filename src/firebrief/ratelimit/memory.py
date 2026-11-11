@@ -24,7 +24,14 @@ class InMemoryLimiter:
 
         if len(seen) >= limit.max_events:
             retry = int(seen[0] + limit.window_seconds - now) + 1
-            return Decision(allowed=False, remaining=0, retry_after_seconds=max(retry, 1))
+            return Decision(
+                allowed=False,
+                remaining=0,
+                limit=limit.max_events,
+                retry_after_seconds=max(retry, 1),
+            )
 
         seen.append(now)
-        return Decision(allowed=True, remaining=limit.max_events - len(seen))
+        return Decision(
+            allowed=True, remaining=limit.max_events - len(seen), limit=limit.max_events
+        )

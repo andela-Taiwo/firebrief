@@ -534,3 +534,81 @@ async def test_an_unavailable_limiter_refuses_rather_than_allowing(app_engine, s
         )
 
     assert response.status_code == 503
+
+
+async def test_a_spoofed_forwarded_for_does_not_choose_the_bucket(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    """Only the rightmost hop is trusted; the leftmost is whatever the caller typed."""
+    app = make_app(
+        app_engine,
+        settings=Settings(
+            link_ip_limit=1, link_email_limit=100, trusted_proxy_hops=1, cookie_secure=False
+        ),
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        payload = {"tenant_id": TENANT_A, "email": "a@alpha.test"}
+        first = await http.post(
+            "/v1/auth/magic-link", json=payload, headers={"x-forwarded-for": "1.1.1.1, 9.9.9.9"}
+        )
+        spoofed = await http.post(
+            "/v1/auth/magic-link", json=payload, headers={"x-forwarded-for": "2.2.2.2, 9.9.9.9"}
+        )
+
+    assert first.status_code == 202
+    assert spoofed.status_code == 429, "rotating the client-supplied entry must not help"
+
+
+async def test_a_refused_ip_does_not_consume_the_address_quota(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    app = make_app(
+        app_engine,
+        settings=Settings(
+            link_ip_limit=1, link_email_limit=2, trusted_proxy_hops=1, cookie_secure=False
+        ),
+    )
+    payload = {"tenant_id": TENANT_A, "email": "a@alpha.test"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        first = await http.post(
+            "/v1/auth/magic-link", json=payload, headers={"x-forwarded-for": "1.1.1.1"}
+        )
+        blocked = await http.post(
+            "/v1/auth/magic-link", json=payload, headers={"x-forwarded-for": "1.1.1.1"}
+        )
+        other_ip = await http.post(
+            "/v1/auth/magic-link", json=payload, headers={"x-forwarded-for": "2.2.2.2"}
+        )
+        exhausted = await http.post(
+            "/v1/auth/magic-link", json=payload, headers={"x-forwarded-for": "3.3.3.3"}
+        )
+
+    assert first.status_code == 202
+    assert blocked.status_code == 429
+    assert other_ip.status_code == 202, "the blocked request must not have spent the address quota"
+    assert exhausted.status_code == 429
+
+
+async def test_production_refuses_to_start_without_a_proxy_setup(app_engine) -> None:  # type: ignore[no-untyped-def]
+    from asgi_lifespan import LifespanManager
+
+    app = make_app(app_engine, settings=Settings(environment="production", cookie_secure=True))
+
+    with pytest.raises(RuntimeError, match="trusted_proxy_hops"):
+        async with LifespanManager(app):
+            pass
+
+
+async def test_allowed_requests_report_the_remaining_budget(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    app = make_app(app_engine, settings=Settings(link_email_limit=2, cookie_secure=False))
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        response = await http.post(
+            "/v1/auth/magic-link", json={"tenant_id": TENANT_A, "email": "a@alpha.test"}
+        )
+
+    assert response.headers["ratelimit-limit"] == "2"
+    assert response.headers["ratelimit-remaining"] == "1"
+    assert int(response.headers["ratelimit-reset"]) > 0

@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from firebrief.answer import answer_question
 from firebrief.answer.judge import SupportJudge
 from firebrief.answer.pipeline import BudgetScope
-from firebrief.api.config import Settings
+from firebrief.api.config import DEVELOPMENT_SECRET, Settings
 from firebrief.api.schemas import (
     AnswerRequest,
     AnswerResponse,
@@ -78,6 +78,14 @@ def create_app(
         # A deployment that cannot keep tenants apart must not start.
         async with engine.begin() as connection:
             await assert_safe_database_role(connection)
+        if settings.environment == "production":
+            if settings.trusted_proxy_hops == 0 and settings.client_ip_header is None:
+                raise RuntimeError(
+                    "set trusted_proxy_hops or client_ip_header in production: "
+                    "every user would otherwise share one rate-limit bucket"
+                )
+            if settings.rate_limit_secret == DEVELOPMENT_SECRET:
+                raise RuntimeError("set rate_limit_secret in production")
         yield
 
     app = FastAPI(title="Firebrief", version="0.1.0", lifespan=lifespan)
@@ -148,18 +156,21 @@ def create_app(
         return {"status": "ready"}
 
     @app.post("/v1/auth/magic-link", status_code=status.HTTP_202_ACCEPTED)
-    async def magic_link(body: MagicLinkRequest, request: Request) -> object:
+    async def magic_link(body: MagicLinkRequest, request: Request, response: Response) -> object:
+        # The IP first: a refused caller must not consume the address's quota.
         limited = await _enforce(
             limiter,
-            key_for("link:email", body.email),
-            Limit(settings.link_email_limit, settings.link_window_seconds),
+            key_for("link:ip", _client_ip(request, settings), settings.rate_limit_secret),
+            Limit(settings.link_ip_limit, settings.link_window_seconds),
+            response,
         )
         if limited is not None:
             return limited
         limited = await _enforce(
             limiter,
-            key_for("link:ip", _client_ip(request, settings)),
-            Limit(settings.link_ip_limit, settings.link_window_seconds),
+            key_for("link:email", body.email, settings.rate_limit_secret),
+            Limit(settings.link_email_limit, settings.link_window_seconds),
+            response,
         )
         if limited is not None:
             return limited
@@ -169,7 +180,17 @@ def create_app(
         return {"status": "sent"}
 
     @app.post("/v1/auth/verify", response_model=SessionResponse)
-    async def verify(body: VerifyRequest, response: Response) -> SessionResponse:
+    async def verify(
+        body: VerifyRequest, request: Request, response: Response
+    ) -> SessionResponse | JSONResponse:
+        limited = await _enforce(
+            limiter,
+            key_for("verify:ip", _client_ip(request, settings), settings.rate_limit_secret),
+            Limit(settings.verify_ip_limit, settings.link_window_seconds),
+            response,
+        )
+        if limited is not None:
+            return limited
         try:
             login: LoginResult = await login_with_magic_link(engine, body.token)
         except (InvalidToken, LinkNotUsable) as exc:
@@ -208,12 +229,18 @@ def create_app(
     async def answers(
         request: Request,
         body: AnswerRequest,
+        response: Response,
         context: AuthContext = Depends(current_session),
     ) -> AnswerResponse | JSONResponse:
         limited = await _enforce(
             limiter,
-            key_for("answer:user", f"{context.tenant_id}:{context.user_id}"),
+            key_for(
+                "answer:user",
+                f"{context.tenant_id}:{context.user_id}",
+                settings.rate_limit_secret,
+            ),
             Limit(settings.answer_user_limit, settings.answer_window_seconds),
+            response,
         )
         if limited is not None:
             return limited
@@ -244,7 +271,9 @@ def create_app(
     return app
 
 
-async def _enforce(limiter: Limiter, key: str, limit: Limit) -> JSONResponse | None:
+async def _enforce(
+    limiter: Limiter, key: str, limit: Limit, response: Response
+) -> JSONResponse | None:
     """A limiter that cannot answer must not let traffic through (ADR 0007)."""
     try:
         decision = await limiter.check(key, limit)
@@ -255,6 +284,9 @@ async def _enforce(limiter: Limiter, key: str, limit: Limit) -> JSONResponse | N
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     if decision.allowed:
+        response.headers["ratelimit-limit"] = str(decision.limit)
+        response.headers["ratelimit-remaining"] = str(decision.remaining)
+        response.headers["ratelimit-reset"] = str(limit.window_seconds)
         return None
     return JSONResponse(
         {"detail": "too many requests"},
@@ -264,10 +296,23 @@ async def _enforce(limiter: Limiter, key: str, limit: Limit) -> JSONResponse | N
 
 
 def _client_ip(request: Request, settings: Settings) -> str:
-    if settings.trust_forwarded_for:
+    """The address the platform saw, never one the client wrote for itself.
+
+    `X-Forwarded-For` grows on the right, so with N trusted proxies the client is the Nth
+    entry from the right. The leftmost entries are whatever the caller chose to send.
+    """
+    if settings.client_ip_header:
+        value = request.headers.get(settings.client_ip_header)
+        if value:
+            return value.strip()
+
+    if settings.trusted_proxy_hops > 0:
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
-            return forwarded.split(",")[0].strip()
+            parts = [part.strip() for part in forwarded.split(",") if part.strip()]
+            if len(parts) >= settings.trusted_proxy_hops:
+                return parts[-settings.trusted_proxy_hops]
+
     return request.client.host if request.client else "unknown"
 
 

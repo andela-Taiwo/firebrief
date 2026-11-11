@@ -3,19 +3,23 @@
 Three limits, because they fail in different ways: a single address can be bombed, a
 single IP can rotate addresses, and one user can spend the whole budget on answers.
 
-Keys are hashed, so the store holds no email addresses, IP addresses or user ids.
+Keys are an HMAC of the value, keyed with a server secret, so the store holds no email
+addresses, IP addresses or user ids — and cannot be reversed by hashing a guess.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 from dataclasses import dataclass
 from typing import Protocol
 
 
-def key_for(scope: str, value: str) -> str:
-    """A key that reveals nothing about the value it counts."""
-    digest = hashlib.sha256(value.strip().lower().encode("utf-8")).hexdigest()
+def key_for(scope: str, value: str, secret: str) -> str:
+    """A key that reveals nothing about the value, and changes if the secret rotates."""
+    digest = hmac.new(
+        secret.encode("utf-8"), value.strip().lower().encode("utf-8"), hashlib.sha256
+    ).hexdigest()
     return f"rl:{scope}:{digest}"
 
 
@@ -23,6 +27,7 @@ def key_for(scope: str, value: str) -> str:
 class Decision:
     allowed: bool
     remaining: int
+    limit: int = 0
     retry_after_seconds: int = 0
 
 

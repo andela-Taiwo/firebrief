@@ -1,20 +1,25 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
-from firebrief.ratelimit import InMemoryLimiter, Limit, RedisLimiter, key_for
+from firebrief.ratelimit import InMemoryLimiter, Limit, RedisClient, RedisLimiter, key_for
 
 
-def test_a_key_reveals_nothing_about_its_value() -> None:
-    key = key_for("link:email", "Ada@Alpha.Test")
+def test_a_key_changes_with_the_secret() -> None:
+    """A plain hash could be reversed by hashing a guess; an HMAC cannot."""
+    first = key_for("link:email", "ada@alpha.test", "secret-one")
+    second = key_for("link:email", "ada@alpha.test", "secret-two")
 
-    assert "ada" not in key.lower()
-    assert "alpha" not in key.lower()
-    assert key.startswith("rl:link:email:")
+    assert first != second
+    assert "ada" not in first
 
 
 def test_the_same_value_normalised_gives_the_same_key() -> None:
-    assert key_for("link:email", " A@Alpha.Test ") == key_for("link:email", "a@alpha.test")
+    assert key_for("link:email", " A@Alpha.Test ", "s") == key_for(
+        "link:email", "a@alpha.test", "s"
+    )
 
 
 async def test_the_memory_limiter_allows_up_to_the_limit() -> None:
@@ -62,10 +67,11 @@ def test_a_nonsense_limit_is_refused(events: int, window: int) -> None:
 
 
 async def test_the_redis_limiter_counts_in_a_sorted_set() -> None:
-    fakeredis = pytest.importorskip("fakeredis.aioredis")
-    client = fakeredis.FakeRedis()
+    import fakeredis
+
+    client = fakeredis.aioredis.FakeRedis()
     now = [1000.0]
-    limiter = RedisLimiter(client=client, clock=lambda: now[0])
+    limiter = RedisLimiter(client=cast(RedisClient, client), clock=lambda: now[0])
     limit = Limit(max_events=2, window_seconds=60)
 
     assert (await limiter.check("k", limit)).allowed
@@ -75,3 +81,18 @@ async def test_the_redis_limiter_counts_in_a_sorted_set() -> None:
 
     now[0] = 1061.0
     assert (await limiter.check("k", limit)).allowed
+
+
+async def test_the_redis_limiter_is_exact_under_parallel_requests() -> None:
+    """Ten concurrent checks with a limit of two: at most two may be allowed."""
+    import asyncio
+
+    import fakeredis
+
+    client = fakeredis.aioredis.FakeRedis()
+    limiter = RedisLimiter(client=cast(RedisClient, client), clock=lambda: 1000.0)
+    limit = Limit(max_events=2, window_seconds=60)
+
+    decisions = await asyncio.gather(*[limiter.check("k", limit) for _ in range(10)])
+
+    assert sum(1 for decision in decisions if decision.allowed) <= 2

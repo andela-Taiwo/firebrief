@@ -65,3 +65,27 @@ Canaries: skip the magic-link check; store keys in clear; fail open on an outage
 ## Effort
 
 2 dev-days, one PR.
+
+## Review responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| **Must** | The IP limit could be spoofed or shared by everyone | `X-Forwarded-For` is read from the right, by the configured number of trusted hops, so the leftmost (client-written) entries cannot choose a bucket. A platform header (`client_ip_header`, e.g. `fly-client-ip`) takes precedence. Production refuses to start with neither configured, and a test asserts it |
+| **Must** | A refused IP still spent the victim's address quota | The IP is checked first, and the address is only counted once the IP is allowed. A test drives a blocked IP against one address and then shows a different IP still has the address quota intact |
+| **Must** | The Redis overshoot was unbounded under parallel requests | One `MULTI` pipeline adds the candidate, prunes the window, counts and refreshes the TTL; a count over the limit removes the candidate and refuses. A test fires ten concurrent checks at a limit of two and asserts at most two are allowed |
+| **Must** | Hashed keys could be reversed by guessing | `key_for` takes a server secret and uses HMAC-SHA256, so the store cannot be brute-forced. Rotating the secret resets the counters. Tested by changing the secret |
+| Should | The Redis test could silently skip | `fakeredis` is pinned and `importorskip` is gone |
+| Should | A docstring was orphaned in `Settings` | Moved back under `allowed_origins` |
+| Should | `/v1/auth/verify` had no limit | A generous per-IP limit, 60 per window |
+| Should | `remaining` was computed and never sent | `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset` on allowed responses |
+| Minor | The Redis clock is the app's, so instances can skew | Recorded in the module docstring rather than hidden |
+| Minor | The TTL was refreshed outside the pipeline | It is set inside the pipeline now |
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C91 | The leftmost `X-Forwarded-For` entry is trusted | spoofed-header test |
+| C92 | The address is counted before the IP is allowed | blocked-IP quota test |
+| C93 | The Redis check is not exact | parallel-requests test |
+| C94 | The key is a plain hash instead of an HMAC | secret-rotation test |
