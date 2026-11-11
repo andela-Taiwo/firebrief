@@ -100,6 +100,15 @@ make help       # list every target
 
 Environment variables for local runs are listed in [`.env.example`](.env.example).
 
+Other useful targets:
+
+```bash
+make eval-retrieval   # retrieval smoke gate (recall@3)
+make db-roundtrip     # migrate up, down, up, then check for model drift
+make docker-smoke     # build the image, check it imports and does not run as root
+make secrets          # scan the full git history for secrets
+```
+
 ## Run it locally
 
 End to end, from a clean checkout. Two terminals: one for the API, one for the web UI.
@@ -163,15 +172,6 @@ point `FIREBRIEF_DATABASE_URL` at the owner you will see exactly that error.
 make web-test                # typecheck + Vitest + jest-axe
 cd web && npx playwright install chromium && npm run e2e
 cd web && npm run build      # static pages, sitemap, robots
-```
-
-Other useful targets:
-
-```bash
-make eval-retrieval   # retrieval smoke gate (recall@3)
-make db-roundtrip     # migrate up, down, up, then check for model drift
-make docker-smoke     # build the image, check it imports and does not run as root
-make secrets          # scan the full git history for secrets
 ```
 
 ## Repository layout
