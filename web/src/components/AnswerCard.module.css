@@ -1,0 +1,22 @@
+.card {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-6);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
+  background: var(--surface-raised);
+}
+
+.answer {
+  font-size: var(--body-lg);
+  line-height: 1.6;
+  max-width: var(--measure);
+  white-space: pre-wrap;
+}
+
+.marker {
+  font-size: var(--small);
+  font-weight: 600;
+  text-decoration: none;
+  padding: 0 2px;
+}

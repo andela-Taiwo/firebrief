@@ -1,0 +1,26 @@
+.intro {
+  color: var(--muted);
+  margin: var(--space-2) 0 var(--space-6);
+  max-width: var(--measure);
+}
+
+.form {
+  display: grid;
+  gap: var(--space-4);
+  max-width: 28rem;
+}
+
+.sent {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-6);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  max-width: 32rem;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: var(--small);
+}

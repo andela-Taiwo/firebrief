@@ -1,0 +1,22 @@
+.panel {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-6);
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.next {
+  font-weight: 600;
+}
+
+.details {
+  font-size: var(--small);
+}
+
+.evidence {
+  color: var(--muted);
+  font-size: var(--small);
+}

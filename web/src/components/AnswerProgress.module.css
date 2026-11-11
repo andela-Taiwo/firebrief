@@ -1,0 +1,16 @@
+.progress {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  color: var(--muted);
+  padding: var(--space-4) 0;
+}
+
+.status {
+  font-size: var(--body-lg);
+}
+
+.timer {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--small);
+}
