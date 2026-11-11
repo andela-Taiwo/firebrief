@@ -13,6 +13,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import sqlalchemy as sa
+from dotenv import load_dotenv
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -23,6 +24,7 @@ from firebrief.ingest.embed import BagOfWordsEmbedder
 from firebrief.ingest.store_embed import embed_version
 
 ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(ROOT / ".env", override=False)
 
 
 def owner_url() -> str:
@@ -60,7 +62,7 @@ async def main() -> None:
             sa.text(
                 "insert into users (id, tenant_id, email, name) "
                 "values (:id, :tenant_id, :email, 'Local developer') "
-                "on conflict (id) do nothing"
+                "on conflict (id) do update set email = excluded.email"
             ),
             {"id": DEV_USER, "tenant_id": DEV_TENANT, "email": DEV_EMAIL},
         )

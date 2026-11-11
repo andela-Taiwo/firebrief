@@ -147,6 +147,27 @@ RESEND_API_KEY=re_... FIREBRIEF_EMAIL_FROM='Firebrief <sign-in@yourdomain>' make
 use a verified domain for anyone else. In production the API refuses to start without
 `RESEND_API_KEY`: printing sign-in links to a log is not a delivery mechanism.
 
+Settings come from `.env` at the repository root, which the API loads at start. After
+changing it, run `make restart` — a running process does not re-read the file.
+
+**To receive the link for real**, three things must line up: a verified `from` domain in
+Resend, a `FIREBRIEF_DEV_EMAIL` that can receive mail, and a re-seed so the stored address
+is that one:
+
+```bash
+# .env
+RESEND_API_KEY=re_...
+FIREBRIEF_EMAIL_FROM=Firebrief <sign-in@yourdomain>
+FIREBRIEF_DEV_EMAIL=you@yourdomain
+
+make dev-setup     # updates the seeded user's address
+make email-check TO=you@yourdomain   # sends one message and prints Resend's answer
+make restart
+```
+
+`make email-check` is the opposite of the endpoint: it shows the provider's rejection instead
+of swallowing it, because the endpoint must not reveal whether an address exists.
+
 If Resend rejects a message, the endpoint still returns the same `202`; the failure is
 logged, because whether delivery failed must not reveal whether an address exists.
 

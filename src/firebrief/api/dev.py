@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
 import httpx
+from dotenv import load_dotenv
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -40,11 +42,16 @@ from firebrief.llm import AnthropicProvider, OpenAIProvider, Provider
 from firebrief.llm.extractive import ExtractiveProvider
 from firebrief.ratelimit import InMemoryLimiter
 
+# `.env` is read here, at the one entry point development uses. Library code never reads
+# the environment, so a `.env` file cannot quietly change behaviour in production.
+ROOT = Path(__file__).resolve().parents[3]
+load_dotenv(ROOT / ".env", override=False)
+
 logger = logging.getLogger("firebrief.dev")
 
 DEV_TENANT = "018f0000-0000-7000-8000-0000000000aa"
 DEV_USER = "018f0000-0000-7000-8000-0000000000ab"
-DEV_EMAIL = "dev@firebrief.local"
+DEV_EMAIL = os.environ.get("FIREBRIEF_DEV_EMAIL", "dev@firebrief.local")
 DEV_DAILY_MICROS = 10_000_000
 
 
@@ -53,10 +60,10 @@ class ConsoleEmailSender:
 
     async def send_magic_link(self, *, to: str, token: str) -> None:
         base = os.environ.get("FIREBRIEF_WEB_URL", "http://127.0.0.1:5173")
-        print(
-            f"\n  Sign-in link for {to}:\n  {base}/auth/verify#token={token}\n",
-            flush=True,
-        )
+        link = f"{base}/auth/verify#token={token}"
+        # Printed for `make api` in a terminal, and logged so `make logs` shows it too.
+        print(f"\n  Sign-in link for {to}:\n  {link}\n", flush=True)
+        logger.info("sign-in link for %s: %s", to, link)
 
 
 def database_url() -> str:
@@ -116,6 +123,19 @@ def build_sender() -> EmailSender:
             from_address=os.environ.get("FIREBRIEF_EMAIL_FROM", DEFAULT_FROM),
         )
         logger.info("sending sign-in links through Resend from %s", sender.from_address)
+        if not key.startswith("re_"):
+            logger.warning("RESEND_API_KEY does not look like a Resend key")
+        if any(
+            bad in sender.from_address for bad in ("yourdomain", "example.com", "example.invalid")
+        ):
+            logger.warning(
+                "FIREBRIEF_EMAIL_FROM uses a placeholder domain (%s); Resend will reject it",
+                sender.from_address,
+            )
+        if DEV_EMAIL.endswith((".local", ".test", ".invalid")):
+            logger.warning(
+                "the seeded address %s cannot receive mail; set FIREBRIEF_DEV_EMAIL", DEV_EMAIL
+            )
         return sender
     if environment == "production":
         raise SystemExit("RESEND_API_KEY is required in production")

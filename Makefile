@@ -4,7 +4,7 @@ SHELL := /bin/bash
 UV ?= uv
 export UV_CACHE_DIR ?= $(CURDIR)/.uv-cache
 
-.PHONY: help setup check check-clean canary lint fmt fmt-check types boundaries licenses secrets test eval-retrieval web-install dev-setup seed start stop restart status logs api web web-test db-migrate db-roundtrip up down docker-smoke clean
+.PHONY: help setup check check-clean canary lint fmt fmt-check types boundaries licenses secrets test eval-retrieval web-install dev-setup seed start stop restart status logs email-check api web web-test db-migrate db-roundtrip up down docker-smoke clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | sort \
@@ -56,6 +56,10 @@ dev-setup: ## Migrate and seed the local development database (never the test on
 
 seed: ## Re-create the local workspace, user and demonstration corpus
 	$(UV) run python scripts/dev_seed.py
+
+email-check: ## Send one test sign-in email: make email-check TO=you@example.com
+	@test -n "$(TO)" || (echo 'usage: make email-check TO=you@example.com' >&2; exit 2)
+	$(UV) run python scripts/check_email.py "$(TO)"
 
 start: ## Start the API and web UI in the background
 	./scripts/dev.sh start
