@@ -43,9 +43,11 @@ def _limit_for(key: CounterKey) -> int:
     return MONTHLY_LIMIT if key.period is Period.MONTHLY else DAILY_LIMIT
 
 
-def _assert_invariants(service: BudgetService, ledger: InMemoryLedger) -> None:
+async def _assert_invariants(service: BudgetService, ledger: InMemoryLedger) -> None:
     pending: dict[CounterKey, int] = defaultdict(int)
-    for reservation in service.store.pending():
+    for reservation in ledger.reservations():
+        if reservation.state != "pending":
+            continue
         for key in reservation.keys:
             pending[key] += reservation.amount
 
@@ -65,14 +67,16 @@ def _assert_invariants(service: BudgetService, ledger: InMemoryLedger) -> None:
         max_size=25,
     )
 )
-def test_operations_always_balance(ops: list[tuple[str, int]]) -> None:
+async def test_operations_always_balance(ops: list[tuple[str, int]]) -> None:
     service, ledger, clock_now = _build()
     pending: list[str] = []
+    issued = 0
 
     for kind, index in ops:
         if kind == "reserve":
-            decision = service.reserve(
-                request_id="r",
+            issued += 1
+            decision = await service.reserve(
+                request_id=f"r{issued}",
                 org_id="o1",
                 team_id="t1",
                 user_id="u1",
@@ -83,16 +87,16 @@ def test_operations_always_balance(ops: list[tuple[str, int]]) -> None:
             if decision.admitted and decision.reservation is not None:
                 pending.append(decision.reservation.id)
         elif kind == "settle" and pending:
-            service.settle(pending.pop(index % len(pending)), input_tokens=7, output_tokens=3)
+            await service.settle(pending.pop(index % len(pending)), input_tokens=7, output_tokens=3)
         elif kind == "release" and pending:
-            service.release(pending.pop(index % len(pending)))
+            await service.release(pending.pop(index % len(pending)))
         elif kind == "sweep":
-            service.sweep(now=clock_now + timedelta(minutes=11))
+            await service.sweep(now=clock_now + timedelta(minutes=11))
             pending.clear()  # everything outstanding is past its TTL and now released
 
-        _assert_invariants(service, ledger)
+        await _assert_invariants(service, ledger)
 
-    _assert_invariants(service, ledger)
+    await _assert_invariants(service, ledger)
 
 
 def test_period_start_is_utc_calendar_aligned() -> None:

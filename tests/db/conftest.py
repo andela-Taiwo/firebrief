@@ -131,5 +131,8 @@ async def empty_corpus(owner_engine: AsyncEngine) -> None:
             sa.text("select set_config('session_replication_role', 'replica', true)")
         )
         await connection.execute(
-            sa.text("truncate table chunks, sections, document_versions, documents cascade")
+            sa.text(
+                "truncate table chunks, sections, document_versions, documents, "
+                "budget_counters, budget_reservations cascade"
+            )
         )

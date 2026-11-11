@@ -131,7 +131,7 @@ async def answer_from_sources(
         if scope is None:
             raise ValueError("a budget needs a scope to charge")
         try:
-            decision = budget.reserve(
+            decision = await budget.reserve(
                 request_id=request_id,
                 org_id=scope.org_id,
                 team_id=scope.team_id,
@@ -147,6 +147,14 @@ async def answer_from_sources(
                 RefusalReason.BUDGET_UNAVAILABLE,
                 sources,
                 details=(f"{type(exc).__name__} while reserving; nothing was attempted",),
+                request_id=request_id,
+                redactions=redaction.findings,
+            )
+        if decision.duplicate:
+            return _refuse(
+                question,
+                RefusalReason.DUPLICATE_REQUEST,
+                sources,
                 request_id=request_id,
                 redactions=redaction.findings,
             )
@@ -169,12 +177,12 @@ async def answer_from_sources(
     except Exception as exc:
         logger.warning("provider failed: %s", type(exc).__name__)
         if budget is not None and reservation is not None:
-            _safe(lambda: budget.release(reservation.id), "release")
+            await _safe(budget.release(reservation.id), "release")
         return _refuse(question, RefusalReason.MODEL_UNAVAILABLE, sources, request_id=request_id)
 
     if budget is not None and reservation is not None:
-        _safe(
-            lambda: budget.settle(
+        await _safe(
+            budget.settle(
                 reservation.id,
                 input_tokens=response.usage.input_tokens,
                 output_tokens=response.usage.output_tokens,
@@ -227,10 +235,10 @@ async def answer_from_sources(
     )
 
 
-def _safe(action: Any, name: str) -> None:
+async def _safe(action: Any, name: str) -> None:
     """A bookkeeping failure must not turn an answer into a crash."""
     try:
-        action()
+        await action
     except Exception as exc:
         logger.warning("budget %s failed: %s", name, type(exc).__name__)
 

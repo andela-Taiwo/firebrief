@@ -12,6 +12,7 @@ from datetime import date, datetime
 
 import uuid6
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     Date,
     DateTime,
@@ -27,7 +28,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 NAMING_CONVENTION = {
@@ -275,4 +276,43 @@ class AuthSession(Base):
             ["users.tenant_id", "users.id"],
             name="fk_auth_sessions_tenant_user",
         ),
+    )
+
+
+class BudgetCounter(Base):
+    """A counter per (scope, period, period start). The durable form of the budget."""
+
+    __tablename__ = "budget_counters"
+
+    scope_type: Mapped[str] = mapped_column(String(16), primary_key=True)
+    scope_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    period: Mapped[str] = mapped_column(String(16), primary_key=True)
+    period_start: Mapped[date] = mapped_column(Date, primary_key=True)
+    reserved: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    spent: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+
+    __table_args__ = (
+        CheckConstraint("reserved >= 0", name="reserved_not_negative"),
+        CheckConstraint("spent >= 0", name="spent_not_negative"),
+    )
+
+
+class BudgetReservation(Base):
+    """One row per request, so a restart can still settle or sweep it."""
+
+    __tablename__ = "budget_reservations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_id)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    model: Mapped[str] = mapped_column(String(80), nullable=False)
+    amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    keys: Mapped[list[dict[str, str]]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
+
+    __table_args__ = (
+        CheckConstraint("amount >= 0", name="amount_not_negative"),
+        CheckConstraint("state in ('pending', 'settled', 'released')", name="state_allowed"),
+        Index("ix_budget_reservations_pending", "state", "expires_at"),
     )

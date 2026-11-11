@@ -23,6 +23,7 @@ class RefusalReason(StrEnum):
     BUDGET_EXHAUSTED = "budget_exhausted"
     TRUNCATED = "truncated"
     BUDGET_UNAVAILABLE = "budget_unavailable"
+    DUPLICATE_REQUEST = "duplicate_request"
 
 
 MESSAGES: dict[RefusalReason, str] = {
@@ -40,6 +41,9 @@ MESSAGES: dict[RefusalReason, str] = {
         "The answering service is unavailable right now. Nothing was charged for this."
     ),
     RefusalReason.BUDGET_EXHAUSTED: ("This question would exceed your usage limit."),
+    RefusalReason.DUPLICATE_REQUEST: (
+        "This request has already been answered. Ask again as a new question."
+    ),
     RefusalReason.BUDGET_UNAVAILABLE: (
         "Usage checks are unavailable right now, so nothing was attempted. Nothing was charged."
     ),
