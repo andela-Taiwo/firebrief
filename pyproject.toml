@@ -8,6 +8,7 @@ license = { text = "FSL-1.1-ALv2" }
 dependencies = [
     "alembic>=1.14.0",
     "asyncpg>=0.30.0",
+    "fastapi>=0.115.0",
     "httpx>=0.27.2",
     "pydantic>=2.9.2",
     "pydantic-settings>=2.5.2",
@@ -18,6 +19,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "anyio>=4.6.0",
+    "asgi-lifespan>=2.1.0",
     "hypothesis>=6.112.4",
     "import-linter>=2.1",
     "pip-licenses>=5.0.0",
@@ -58,6 +60,8 @@ ignore = ["S101"]
 # Migrations build DDL by construction; every one is read by a person before it
 # is committed, and the only interpolated value is a validated role identifier.
 "migrations/versions/*.py" = ["S608"]
+# FastAPI's idiom is a call in the default (`Depends(...)`); it is not a mutable default.
+"src/firebrief/api/app.py" = ["B008"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["firebrief", "tests"]

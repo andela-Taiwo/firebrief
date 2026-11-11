@@ -27,6 +27,8 @@ ALLOWLIST: frozenset[str] = frozenset(
         "BSD-3-Clause",
         "Apache-2.0",
         "Apache Software License",
+        # reviewed: sniffio reports its dual licence as one string; both halves are allowed
+        "Apache Software License; MIT License",
         "Apache-2.0 OR BSD-2-Clause",
         "MIT AND PSF-2.0",  # reviewed: greenlet, pulled in by SQLAlchemy
         "ISC",
