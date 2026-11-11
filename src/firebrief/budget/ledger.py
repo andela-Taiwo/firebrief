@@ -69,6 +69,10 @@ class LedgerTransaction(ABC):
     async def set(self, key: CounterKey, counter: Counter) -> None: ...
 
     @abstractmethod
+    async def peek(self, key: CounterKey) -> Counter:
+        """Read without locking or creating a row. For warnings after a settle."""
+
+    @abstractmethod
     async def keys(self) -> Iterable[CounterKey]: ...
 
     @abstractmethod
@@ -77,6 +81,9 @@ class LedgerTransaction(ABC):
 
     @abstractmethod
     async def get_reservation(self, reservation_id: str) -> Reservation | None: ...
+
+    @abstractmethod
+    async def get_reservation_by_request(self, request_id: str) -> Reservation | None: ...
 
     @abstractmethod
     async def claim(self, reservation_id: str, state: str) -> Reservation | None:
@@ -105,6 +112,9 @@ class _InMemoryTransaction(LedgerTransaction):
     async def set(self, key: CounterKey, counter: Counter) -> None:
         self._rows[key] = counter
 
+    async def peek(self, key: CounterKey) -> Counter:
+        return self._rows.get(key, Counter())
+
     async def keys(self) -> Iterable[CounterKey]:
         return tuple(self._rows)
 
@@ -117,6 +127,12 @@ class _InMemoryTransaction(LedgerTransaction):
 
     async def get_reservation(self, reservation_id: str) -> Reservation | None:
         return self._reservations.get(reservation_id)
+
+    async def get_reservation_by_request(self, request_id: str) -> Reservation | None:
+        for reservation in self._reservations.values():
+            if reservation.request_id == request_id:
+                return reservation
+        return None
 
     async def claim(self, reservation_id: str, state: str) -> Reservation | None:
         reservation = self._reservations.get(reservation_id)

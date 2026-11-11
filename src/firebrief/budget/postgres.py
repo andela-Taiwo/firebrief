@@ -16,7 +16,7 @@ from collections.abc import AsyncGenerator, Iterable
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 
-from sqlalchemy import Table, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from firebrief.budget.ledger import Counter, CounterKey, Ledger, LedgerTransaction, Reservation
@@ -90,6 +90,21 @@ class _PostgresTransaction(LedgerTransaction):
             },
         )
 
+    async def peek(self, key: CounterKey) -> Counter:
+        row = (
+            await self._connection.execute(
+                text(
+                    "select reserved, spent from budget_counters "
+                    "where scope_type = :scope_type and scope_id = :scope_id "
+                    "and period = :period and period_start = :period_start"
+                ),
+                _key_params(key),
+            )
+        ).first()
+        if row is None:
+            return Counter()
+        return Counter(reserved=Money(int(row[0])), spent=Money(int(row[1])))
+
     async def keys(self) -> Iterable[CounterKey]:
         rows = (
             await self._connection.execute(
@@ -123,7 +138,8 @@ class _PostgresTransaction(LedgerTransaction):
                 {"request_id": reservation.request_id},
             )
         ).first()
-        assert existing is not None
+        if existing is None:  # pragma: no cover - the insert or the select always wins
+            raise RuntimeError("reservation vanished inside its own transaction")
         return _row_to_reservation(existing)
 
     async def get_reservation(self, reservation_id: str) -> Reservation | None:
@@ -131,6 +147,15 @@ class _PostgresTransaction(LedgerTransaction):
             await self._connection.execute(
                 text("select * from budget_reservations where id = :id"),
                 {"id": uuid.UUID(reservation_id)},
+            )
+        ).first()
+        return _row_to_reservation(row) if row is not None else None
+
+    async def get_reservation_by_request(self, request_id: str) -> Reservation | None:
+        row = (
+            await self._connection.execute(
+                text("select * from budget_reservations where request_id = :request_id"),
+                {"request_id": request_id},
             )
         ).first()
         return _row_to_reservation(row) if row is not None else None
@@ -197,9 +222,3 @@ class PostgresLedger(Ledger):
     async def transaction(self) -> AsyncGenerator[LedgerTransaction]:
         async with self._engine.begin() as connection:
             yield _PostgresTransaction(connection)
-
-
-def reservation_table() -> Table:
-    from firebrief.db.models import BudgetReservation
-
-    return BudgetReservation.__table__  # type: ignore[return-value]

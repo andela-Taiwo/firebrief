@@ -69,6 +69,9 @@ class Decision:
     fallback_model: str | None = None
     """Set when the policy allows a cheaper model to be tried instead."""
 
+    duplicate: bool = False
+    """Set when this request id already has a finished reservation."""
+
 
 @dataclass(frozen=True, slots=True)
 class Settlement:
@@ -205,7 +208,13 @@ class BudgetService:
             # already has instead of reserving twice.
             stored = await txn.add(reservation)
             if stored.id != reservation.id:
-                return Decision(admitted=True, reservation=stored, warnings=())
+                if (
+                    stored.state == ReservationState.PENDING.value
+                    and stored.model == model
+                    and stored.amount == amount
+                ):
+                    return Decision(admitted=True, reservation=stored, warnings=())
+                return Decision(admitted=False, duplicate=True)
 
             for _limit, key in entries:
                 counter = await txn.get(key)
@@ -264,13 +273,19 @@ class BudgetService:
         released once, and rows another instance is working on are skipped.
         """
         moment = now or self.clock()
-        released = 0
+        # Find the expired rows in one short transaction, then release each in its own.
+        # A single long transaction would hold every counter it touched and take them in
+        # an order a concurrent reserve cannot match.
         async with self.ledger.transaction() as txn:
-            for reservation in await txn.expired(moment, limit):
+            due = await txn.expired(moment, limit)
+
+        released = 0
+        for reservation in due:
+            async with self.ledger.transaction() as txn:
                 claimed = await txn.claim(reservation.id, ReservationState.RELEASED.value)
                 if claimed is None:
                     continue
-                for key in claimed.keys:
+                for key in sorted(claimed.keys, key=lambda item: item.sort_key()):
                     counter = await txn.get(key)
                     await txn.set(key, replace(counter, reserved=counter.reserved - claimed.amount))
                 released += 1
@@ -290,7 +305,7 @@ class BudgetService:
                 key = CounterKey(
                     limit.scope_type, limit.scope_id, limit.period, period_start(now, limit.period)
                 )
-                counter = await txn.get(key)
+                counter = await txn.peek(key)
                 ratio = counter.used / limit.amount
                 if ratio >= self.policy.soft_ratio:
                     warnings.append(BudgetWarning(limit, counter.used, 0, ratio))

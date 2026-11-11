@@ -105,3 +105,33 @@ sweep releasing.
 |---|---|---|
 | C101 | The claim is not conditional on `pending` | settle/sweep double-finish test |
 | C102 | `add` returns a fresh reservation instead of the stored one | idempotent-reserve test |
+
+## Re-review 2 responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| **Must** | A retried request could get a free answer | The existing reservation is reused only when it is still `pending` **and** the model and amount match. Otherwise the request is refused as a duplicate (`DUPLICATE_REQUEST`), so nothing is answered without a charge. Tested after a settle, and with a different amount |
+| **Must** | The table-wide grant made the column grant meaningless | The reservation table gets `select, insert` and `update (state)` only. A test asserts the runtime role cannot change an amount — and the canary had to change the live grant, because editing the migration proves nothing about an applied schema |
+| Should | The failed-add test could not fail | The failure is now injected at the counter write, after the reservation insert, and asserts both that the counters are unchanged and that no reservation row exists |
+| Should | The sweeper held a long transaction and locked in an arbitrary order | It discovers expired rows in one short transaction, then releases each in its own, taking that reservation's keys in sorted order |
+| Should | Reading warnings took locks and created rows | `peek` reads without locking or inserting; warnings use it |
+| Minor | `assert existing is not None` vanishes under `-O` | Replaced with an explicit `RuntimeError` |
+| Minor | `keys()` scans the whole table | Left, and noted: it exists for diagnostics, not for a request path |
+| Minor | `reservation_table()` was unused | Removed |
+
+### Still open
+
+- **Late settlements lose their cost.** If a model call outlives the reservation, the
+  sweeper releases it and the late settle is refused, so the spend is undercounted. The
+  fix is either charging late settlements to `spent` with an overage record, or a lifetime
+  comfortably longer than the slowest call. Recorded, not silently accepted.
+- **Nothing schedules the sweep.** Still open from the last review; it belongs with
+  deployment.
+- **Tenant scoping** of the ledger, and **judge/embedding costs** bypassing reservations.
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C103 | A finished reservation is reused for a retry | duplicate-refusal test |
+| C104 | The table-wide update grant returns | amount-immutability test (applied to the live grant) |

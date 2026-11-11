@@ -78,9 +78,11 @@ def upgrade() -> None:
     role = _role()
     for table in TABLES:
         op.execute(f'revoke all on {table} from "{role}"')
-        # No DELETE: a reservation is a record of what was charged.
-        op.execute(f'grant select, insert, update on {table} to "{role}"')
-    # The app may only move a reservation's state; amount and keys are immutable.
+    # No DELETE: a reservation is a record of what was charged.
+    op.execute(f'grant select, insert, update on budget_counters to "{role}"')
+    # A reservation row is immutable apart from its state; a table-wide UPDATE would
+    # silently allow amount and keys to change.
+    op.execute(f'grant select, insert on budget_reservations to "{role}"')
     op.execute(f'grant update (state) on budget_reservations to "{role}"')
 
 

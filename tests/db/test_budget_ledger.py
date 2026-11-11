@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from firebrief.budget import (
@@ -239,3 +240,76 @@ async def test_the_same_request_id_reserves_once(app_engine: AsyncEngine, seeded
 
 def _user_key() -> CounterKey:
     return CounterKey(ScopeType.USER, "u1", Period.DAILY, NOW.date())
+
+
+async def test_a_retry_after_settlement_is_refused_not_reused(
+    app_engine: AsyncEngine, seeded
+) -> None:
+    """Reusing a finished reservation would let the answer through uncharged."""
+    service = make_service(app_engine)
+    first = await _reserve(service, request_id="retry")
+    assert first.reservation is not None
+    await service.settle(first.reservation.id, input_tokens=10, output_tokens=5)
+
+    second = await _reserve(service, request_id="retry")
+
+    assert not second.admitted
+    assert second.duplicate
+
+
+async def test_a_retry_with_a_different_amount_is_refused(app_engine: AsyncEngine, seeded) -> None:
+    service = make_service(app_engine)
+    first = await service.reserve(
+        request_id="same-id", model="tiny", prompt_tokens=10, max_output_tokens=10, **SCOPES
+    )
+    assert first.admitted
+
+    second = await service.reserve(
+        request_id="same-id", model="tiny", prompt_tokens=10, max_output_tokens=50, **SCOPES
+    )
+
+    assert not second.admitted
+    assert second.duplicate
+
+
+async def test_a_failure_after_the_counter_writes_leaves_nothing_behind(
+    app_engine: AsyncEngine,
+    seeded,
+    monkeypatch,  # type: ignore[no-untyped-def]
+) -> None:
+    """The reservation and its capacity are one transaction: neither survives alone."""
+    from firebrief.budget import postgres
+
+    original = postgres._PostgresTransaction.set
+    calls = {"n": 0}
+
+    async def fail_after_first_write(self, key, counter):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] >= 1:
+            raise RuntimeError("counter write failed")
+        return await original(self, key, counter)
+
+    monkeypatch.setattr(postgres._PostgresTransaction, "set", fail_after_first_write)
+    service = make_service(app_engine)
+
+    with pytest.raises(RuntimeError):
+        await _reserve(service, request_id="atomic")
+
+    async with PostgresLedger(app_engine).transaction() as txn:
+        counter = await txn.peek(_user_key())
+        stored = await txn.get_reservation_by_request("atomic")
+    assert counter.reserved == 0
+    assert stored is None, "the reservation must not survive its counter transaction"
+
+
+async def test_the_runtime_role_cannot_change_an_amount(app_engine: AsyncEngine, seeded) -> None:  # type: ignore[no-untyped-def]
+    from sqlalchemy.exc import DBAPIError
+
+    service = make_service(app_engine)
+    await _reserve(service, request_id="immutable")
+
+    with pytest.raises(DBAPIError, match="permission denied"):
+        async with app_engine.begin() as connection:
+            await connection.execute(
+                text("update budget_reservations set amount = 1 where request_id = 'immutable'")
+            )

@@ -150,6 +150,14 @@ async def answer_from_sources(
                 request_id=request_id,
                 redactions=redaction.findings,
             )
+        if decision.duplicate:
+            return _refuse(
+                question,
+                RefusalReason.DUPLICATE_REQUEST,
+                sources,
+                request_id=request_id,
+                redactions=redaction.findings,
+            )
         if not decision.admitted or decision.reservation is None:
             details = ()
             if decision.rejection is not None:
