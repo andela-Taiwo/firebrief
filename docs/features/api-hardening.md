@@ -71,3 +71,34 @@ body; drop `HttpOnly`.
 ## Effort
 
 3 dev-days, one PR.
+
+## Review responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| **Must** | A deployed app would not judge support | `judge` is a required argument with no default, and a construction test asserts `create_app` refuses to be called without one |
+| **Must** | Budgets were not enforced | `budget` is required and the route passes it with a scope built from the session; a user over their limit gets `budget_exhausted` over HTTP |
+| **Must** | The origin check blocked the app's own UI and allowed no-Origin posts | The request's own origin is always allowed; a body must be JSON, because a browser cannot send that cross-site without a preflight; with no Origin the Referer must match |
+| **Must** | The client chose the request id | Always generated on the server. The client's value is validated (`[A-Za-z0-9-]{1,64}`) and logged as `client_request_id`, never used as the id |
+| Should | The role check did not run at startup | A lifespan handler runs it, so a deployment that cannot keep tenants apart fails to start. `/ready` re-checks the database and the role; `/health` only says the process is alive |
+| Should | No security headers | `Cache-Control: no-store` on auth and answer responses, `X-Content-Type-Options: nosniff`, and the `__Host-` cookie prefix when `Secure` is on |
+| Should | Sources were not tied to the answer | Each source carries `cited` and its verified quotes with character offsets |
+| Should | `database_url` was a credential-bearing default | Removed; the engine is injected |
+| Should | Uvicorn's access log records the full URL | Recorded for deployment: run with `--no-access-log`, because this middleware already logs the path without a query string |
+| Test | The enumeration test depended on run order | `seeded` added |
+| Test | The log test watched one logger | Now `caplog.set_level(DEBUG)` across all loggers |
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C81 | The judge falls back to an accept-all default | judge-required test |
+| C82 | The budget is not passed to the pipeline | budget-exhaustion test |
+| C83 | Same-origin POST refused under default settings | same-origin test |
+| C84 | The client's request id is used as-is | client-request-id test |
+
+### Next
+
+Rate limiting, per the review: magic links per address and per IP, answers per user. It is
+the last documented hole before a public demo, and building it before the UI means the UI
+can show "limit reached" from the start.
