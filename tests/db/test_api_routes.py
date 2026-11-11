@@ -206,6 +206,7 @@ def make_app(
     provider: Provider | None = None,
     budget: BudgetService | None = None,
     limiter: Limiter | None = None,
+    sender=None,  # type: ignore[no-untyped-def]
     settings: Settings | None = None,
 ) -> FastAPI:
     return create_app(
@@ -215,7 +216,7 @@ def make_app(
         judge=FixedJudge(),
         budget=budget or make_budget(),
         limiter=limiter or InMemoryLimiter(),
-        sender=RecordingEmailSender(),
+        sender=sender or RecordingEmailSender(),
         settings=settings or Settings(cookie_secure=False),
     )
 
@@ -690,3 +691,26 @@ async def test_production_requires_a_long_secret(app_engine) -> None:  # type: i
     with pytest.raises(RuntimeError, match="32 characters"):
         async with LifespanManager(app):
             pass
+
+
+async def test_a_delivery_failure_does_not_change_the_response(app_engine, seeded) -> None:  # type: ignore[no-untyped-def]
+    """Whether Resend accepted the message must not be observable by the caller."""
+    from firebrief.auth.resend import EmailDeliveryError
+
+    class Failing:
+        async def send_magic_link(self, *, to: str, token: str) -> None:
+            raise EmailDeliveryError("resend rejected the message with status 500")
+
+    app = make_app(app_engine, sender=Failing())
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={"origin": "http://test"}
+    ) as http:
+        known = await http.post(
+            "/v1/auth/magic-link", json={"tenant_id": TENANT_A, "email": "a@alpha.test"}
+        )
+        unknown = await http.post(
+            "/v1/auth/magic-link", json={"tenant_id": TENANT_A, "email": "nobody@alpha.test"}
+        )
+
+    assert known.status_code == unknown.status_code == 202
+    assert known.json() == unknown.json()

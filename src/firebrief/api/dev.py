@@ -24,6 +24,7 @@ from firebrief.answer.judge import FixedJudge
 from firebrief.api.app import create_app
 from firebrief.api.config import Settings
 from firebrief.auth.email import EmailSender
+from firebrief.auth.resend import DEFAULT_FROM, ResendSender
 from firebrief.budget import (
     BudgetService,
     Limit,
@@ -101,8 +102,24 @@ def build_embedder() -> Embedder:
 
 
 def build_sender() -> EmailSender:
-    if os.environ.get("FIREBRIEF_ENVIRONMENT") == "production":
-        raise SystemExit("the console email sender must never run in production")
+    """Resend when a key is present, the terminal otherwise.
+
+    Production must use Resend: a deployment that prints sign-in links to a log has no way
+    for anyone to sign in, and logs are not a delivery mechanism.
+    """
+    key = os.environ.get("RESEND_API_KEY")
+    environment = os.environ.get("FIREBRIEF_ENVIRONMENT", "development")
+    if key:
+        sender = ResendSender(
+            api_key=key,
+            web_url=os.environ.get("FIREBRIEF_WEB_URL", "http://127.0.0.1:5173"),
+            from_address=os.environ.get("FIREBRIEF_EMAIL_FROM", DEFAULT_FROM),
+        )
+        logger.info("sending sign-in links through Resend from %s", sender.from_address)
+        return sender
+    if environment == "production":
+        raise SystemExit("RESEND_API_KEY is required in production")
+    logger.warning("RESEND_API_KEY is not set: the sign-in link will be printed, not emailed")
     return ConsoleEmailSender()
 
 

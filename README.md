@@ -134,9 +134,21 @@ Then open the sign-in URL that `make seed` printed:
 http://127.0.0.1:5173/sign-in?tenant=018f0000-0000-7000-8000-0000000000aa
 ```
 
-Enter any email address that matches the seeded user, `dev@firebrief.local`. There is no
-mail server: the API prints the sign-in link to the terminal where `make api` is running.
-Open it, and you are signed in.
+Enter the seeded address, `dev@firebrief.local`.
+
+**Where the link goes depends on one variable.** With `RESEND_API_KEY` set, the link is
+emailed by Resend; without it, the API prints the link to the terminal where `make api` runs:
+
+```bash
+RESEND_API_KEY=re_... FIREBRIEF_EMAIL_FROM='Firebrief <sign-in@yourdomain>' make api
+```
+
+`onboarding@resend.dev` (the default sender) only delivers to the Resend account owner, so
+use a verified domain for anyone else. In production the API refuses to start without
+`RESEND_API_KEY`: printing sign-in links to a log is not a delivery mechanism.
+
+If Resend rejects a message, the endpoint still returns the same `202`; the failure is
+logged, because whether delivery failed must not reveal whether an address exists.
 
 Ask a question such as **"How long can a dead end be?"**. The web UI proxies `/v1` to the
 API, so the `HttpOnly` session cookie works on one origin.

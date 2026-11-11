@@ -1,6 +1,7 @@
 """Magic-link authentication."""
 
 from firebrief.auth.email import EmailSender, NullEmailSender, RecordingEmailSender
+from firebrief.auth.resend import EmailDeliveryError, ResendSender
 from firebrief.auth.service import (
     MAGIC_LINK_TTL,
     SESSION_TTL,
@@ -21,12 +22,14 @@ __all__ = [
     "SESSION_TTL",
     "AuthContext",
     "AuthError",
+    "EmailDeliveryError",
     "EmailSender",
     "InvalidToken",
     "LinkNotUsable",
     "LoginResult",
     "NullEmailSender",
     "RecordingEmailSender",
+    "ResendSender",
     "hash_token",
     "login_with_magic_link",
     "new_token",

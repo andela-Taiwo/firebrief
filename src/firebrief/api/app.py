@@ -39,6 +39,7 @@ from firebrief.api.schemas import (
 from firebrief.auth import (
     SESSION_TTL,
     AuthContext,
+    EmailDeliveryError,
     InvalidToken,
     LinkNotUsable,
     LoginResult,
@@ -178,7 +179,14 @@ def create_app(
         if limited is not None:
             return limited
 
-        await request_magic_link(engine, tenant_id=body.tenant_id, email=body.email, sender=sender)
+        try:
+            await request_magic_link(
+                engine, tenant_id=body.tenant_id, email=body.email, sender=sender
+            )
+        except EmailDeliveryError as exc:
+            # The response must not change: whether delivery failed is not a fact about
+            # whether the address exists. The operator sees it here.
+            logger.error("magic link delivery failed: %s", exc)
         # The same answer whether or not the address exists.
         return {"status": "sent"}
 
