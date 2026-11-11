@@ -75,3 +75,33 @@ sweep releasing.
 ## Effort
 
 3 dev-days, one PR.
+
+## Review responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| **Must** | Counters and reservations committed separately | The reservation now lives in the ledger transaction: `add`, `claim`, `expired` and `get_reservation` are methods on `LedgerTransaction`, so a reservation and its capacity commit together or not at all. A test makes `add` raise and asserts the counters are untouched |
+| **Must** | Settle, release and sweep could process one reservation twice | The state change is the gate: `update ... where id = :id and state = 'pending' returning *`, inside the counter transaction. The loser gets nothing back and raises. Tested with `gather(settle, sweep)` on an expired reservation, plus a second settle refused |
+| Should | Lock order was not fixed | Keys are sorted by a deterministic `(scope, scope_id, period, start)` before locking. A test reserves for two users sharing an organisation concurrently |
+| Should | Duplicate request ids differed between stores | `reserve` is idempotent: the same request id returns the existing reservation, in both stores. Tested |
+| Should | `pending()` loaded every row | `expired(now, limit)` selects only expired pending rows with `for update skip locked`, so several sweepers can run |
+| Should | The upsert could change `amount` | `add` only ever inserts; `on conflict do nothing`; the app role gets `grant update (state)` on reservations |
+| Minor | `keys` as `JSON` | `JSONB` |
+| Minor | `keys()` scans the whole table | Left as-is and noted: it exists for tests and diagnostics, not for a request path |
+| Minor | Sweep uses the application clock | Left as-is, noted: skew shifts the sweep moment by seconds, and the TTL is minutes |
+| Minor | `snapshot()` dropped its lock | Docstring says it is not safe under a concurrent transaction |
+
+### Still open
+
+- **Nothing schedules the sweep yet.** `sweep()` is tested and safe to run on several
+  instances, but no timer calls it. The runner belongs with the deployment work: a lifespan
+  background task or a cron entrypoint.
+- **Tenant scoping** for the ledger, recorded above.
+- **Judge and embedding costs** still bypass reservations.
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C101 | The claim is not conditional on `pending` | settle/sweep double-finish test |
+| C102 | `add` returns a fresh reservation instead of the stored one | idempotent-reserve test |

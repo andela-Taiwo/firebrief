@@ -234,9 +234,9 @@ async def test_concurrent_requests_cannot_overspend(
     limits = LimitBook([Limit(ScopeType.USER, "u1", Period.DAILY, 5_000)])
     service = BudgetService(ledger=ledger, limits=limits, prices=prices, clock=clock)
 
-    async def worker() -> Decision:
+    async def worker(index: int) -> Decision:
         return await service.reserve(
-            request_id="concurrent",
+            request_id=f"concurrent-{index}",
             org_id="o1",
             team_id="t1",
             user_id="u1",
@@ -245,7 +245,7 @@ async def test_concurrent_requests_cannot_overspend(
             max_output_tokens=500,  # costs exactly 1000 micros
         )
 
-    decisions = await asyncio.gather(*[worker() for _ in range(8)])
+    decisions = await asyncio.gather(*[worker(index) for index in range(8)])
 
     admitted = [decision for decision in decisions if decision.admitted]
     assert len(admitted) == 5

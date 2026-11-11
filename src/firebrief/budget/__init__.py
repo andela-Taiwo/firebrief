@@ -1,7 +1,7 @@
 """Token budgeting and cost control."""
 
 from firebrief.budget.estimate import estimate_prompt_tokens, estimate_tokens
-from firebrief.budget.ledger import Counter, CounterKey, InMemoryLedger
+from firebrief.budget.ledger import Counter, CounterKey, InMemoryLedger, Reservation
 from firebrief.budget.limits import Limit, LimitBook, Period, ScopeType
 from firebrief.budget.pricing import ModelPrice, PriceTable, PricingError, UnknownModelError
 from firebrief.budget.service import (
@@ -11,9 +11,8 @@ from firebrief.budget.service import (
     BudgetService,
     BudgetWarning,
     Decision,
-    InMemoryReservationStore,
     Rejection,
-    Reservation,
+    ReservationNotPendingError,
     ReservationState,
     Settlement,
     UnknownReservationError,
@@ -31,7 +30,6 @@ __all__ = [
     "CounterKey",
     "Decision",
     "InMemoryLedger",
-    "InMemoryReservationStore",
     "Limit",
     "LimitBook",
     "ModelPrice",
@@ -40,6 +38,7 @@ __all__ = [
     "PricingError",
     "Rejection",
     "Reservation",
+    "ReservationNotPendingError",
     "ReservationState",
     "ScopeType",
     "Settlement",

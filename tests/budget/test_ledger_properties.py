@@ -45,7 +45,9 @@ def _limit_for(key: CounterKey) -> int:
 
 async def _assert_invariants(service: BudgetService, ledger: InMemoryLedger) -> None:
     pending: dict[CounterKey, int] = defaultdict(int)
-    for reservation in await service.store.pending():
+    for reservation in ledger.reservations():
+        if reservation.state != "pending":
+            continue
         for key in reservation.keys:
             pending[key] += reservation.amount
 
@@ -68,11 +70,13 @@ async def _assert_invariants(service: BudgetService, ledger: InMemoryLedger) -> 
 async def test_operations_always_balance(ops: list[tuple[str, int]]) -> None:
     service, ledger, clock_now = _build()
     pending: list[str] = []
+    issued = 0
 
     for kind, index in ops:
         if kind == "reserve":
+            issued += 1
             decision = await service.reserve(
-                request_id="r",
+                request_id=f"r{issued}",
                 org_id="o1",
                 team_id="t1",
                 user_id="u1",

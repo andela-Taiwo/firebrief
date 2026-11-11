@@ -1,24 +1,35 @@
-"""A durable ledger and reservation store.
+"""A durable ledger.
 
-The counters are one row per (scope, period, period start); a reservation is one row per
-request. Writes take a row lock, so two concurrent reservations at the same key serialise
-and cannot both fit under a limit that only has room for one.
+Counters and reservations share one transaction, because they must commit together: a
+reservation without its capacity leaks nothing to sweep, and capacity without a
+reservation leaks nothing to settle.
+
+Every state change is one conditional `UPDATE ... WHERE state = 'pending' RETURNING`, so a
+late settle racing the sweeper — or two sweepers on two instances — cannot both win.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncGenerator, Iterable
 from contextlib import asynccontextmanager
-from typing import cast
+from datetime import date, datetime
 
 from sqlalchemy import Table, text
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from firebrief.budget.ledger import Counter, CounterKey
+from firebrief.budget.ledger import Counter, CounterKey, Ledger, LedgerTransaction, Reservation
+from firebrief.budget.limits import Period, ScopeType
 from firebrief.budget.money import Money
-from firebrief.budget.service import Reservation, ReservationState
+
+ENSURE = text(
+    """
+    insert into budget_counters (scope_type, scope_id, period, period_start, reserved, spent)
+    values (:scope_type, :scope_id, :period, :period_start, 0, 0)
+    on conflict (scope_type, scope_id, period, period_start) do nothing
+    """
+)
 
 UPSERT = text(
     """
@@ -29,31 +40,38 @@ UPSERT = text(
     """
 )
 
+CLAIM = text(
+    """
+    update budget_reservations set state = :state
+    where id = :id and state = 'pending'
+    returning *
+    """
+)
 
-class _PostgresTransaction:
+EXPIRED = text(
+    """
+    select * from budget_reservations
+    where state = 'pending' and expires_at <= :now
+    order by expires_at
+    limit :limit
+    for update skip locked
+    """
+)
+
+
+class _PostgresTransaction(LedgerTransaction):
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
 
     async def get(self, key: CounterKey) -> Counter:
-        # `FOR UPDATE` locks rows that exist; a first-time reservation would race with
-        # another first-time reservation. Create the row (or wait for the other
-        # transaction's insert) before locking it.
-        await self._connection.execute(
-            text(
-                "insert into budget_counters "
-                "(scope_type, scope_id, period, period_start, reserved, spent) "
-                "values (:scope_type, :scope_id, :period, :period_start, 0, 0) "
-                "on conflict (scope_type, scope_id, period, period_start) do nothing"
-            ),
-            _key_params(key),
-        )
+        # A lock cannot be taken on a row that does not exist, so create it first.
+        await self._connection.execute(ENSURE, _key_params(key))
         row = (
             await self._connection.execute(
                 text(
                     "select reserved, spent from budget_counters "
                     "where scope_type = :scope_type and scope_id = :scope_id "
-                    "and period = :period and period_start = :period_start "
-                    "for update"
+                    "and period = :period and period_start = :period_start for update"
                 ),
                 _key_params(key),
             )
@@ -78,9 +96,54 @@ class _PostgresTransaction:
                 text("select scope_type, scope_id, period, period_start from budget_counters")
             )
         ).all()
-        from firebrief.budget.limits import Period, ScopeType
-
         return tuple(CounterKey(ScopeType(row[0]), row[1], Period(row[2]), row[3]) for row in rows)
+
+    async def add(self, reservation: Reservation) -> Reservation:
+        await self._connection.execute(
+            text(
+                "insert into budget_reservations "
+                "(id, request_id, model, amount, keys, created_at, expires_at, state) "
+                "values (:id, :request_id, :model, :amount, cast(:keys as jsonb), "
+                ":created_at, :expires_at, "
+                "'pending') on conflict (request_id) do nothing"
+            ),
+            {
+                "id": uuid.UUID(reservation.id),
+                "request_id": reservation.request_id,
+                "model": reservation.model,
+                "amount": int(reservation.amount),
+                "keys": json.dumps(_keys_payload(reservation.keys)),
+                "created_at": reservation.created_at,
+                "expires_at": reservation.expires_at,
+            },
+        )
+        existing = (
+            await self._connection.execute(
+                text("select * from budget_reservations where request_id = :request_id"),
+                {"request_id": reservation.request_id},
+            )
+        ).first()
+        assert existing is not None
+        return _row_to_reservation(existing)
+
+    async def get_reservation(self, reservation_id: str) -> Reservation | None:
+        row = (
+            await self._connection.execute(
+                text("select * from budget_reservations where id = :id"),
+                {"id": uuid.UUID(reservation_id)},
+            )
+        ).first()
+        return _row_to_reservation(row) if row is not None else None
+
+    async def claim(self, reservation_id: str, state: str) -> Reservation | None:
+        row = (
+            await self._connection.execute(CLAIM, {"state": state, "id": uuid.UUID(reservation_id)})
+        ).first()
+        return _row_to_reservation(row) if row is not None else None
+
+    async def expired(self, now: datetime, limit: int = 100) -> tuple[Reservation, ...]:
+        rows = (await self._connection.execute(EXPIRED, {"now": now, "limit": limit})).all()
+        return tuple(_row_to_reservation(row) for row in rows)
 
 
 def _key_params(key: CounterKey) -> dict[str, object]:
@@ -92,85 +155,19 @@ def _key_params(key: CounterKey) -> dict[str, object]:
     }
 
 
-class PostgresLedger:
-    def __init__(self, engine: AsyncEngine) -> None:
-        self._engine = engine
-
-    @asynccontextmanager
-    async def transaction(self) -> AsyncGenerator[_PostgresTransaction]:
-        async with self._engine.begin() as connection:
-            yield _PostgresTransaction(connection)
-
-
-class PostgresReservationStore:
-    def __init__(self, engine: AsyncEngine) -> None:
-        self._engine = engine
-
-    async def add(self, reservation: Reservation) -> None:
-        async with self._engine.begin() as connection:
-            statement = insert(_reservations()).values(
-                id=uuid.UUID(reservation.id),
-                request_id=reservation.request_id,
-                model=reservation.model,
-                amount=int(reservation.amount),
-                keys=[_key_payload(key) for key in reservation.keys],
-                created_at=reservation.created_at,
-                expires_at=reservation.expires_at,
-                state=reservation.state.value,
-            )
-            await connection.execute(
-                statement.on_conflict_do_update(
-                    index_elements=["id"],
-                    set_={
-                        "state": statement.excluded.state,
-                        "amount": statement.excluded.amount,
-                    },
-                )
-            )
-
-    async def get(self, reservation_id: str) -> Reservation | None:
-        async with self._engine.connect() as connection:
-            row = (
-                await connection.execute(
-                    _reservations()
-                    .select()
-                    .where(_reservations().c.id == uuid.UUID(reservation_id))
-                )
-            ).first()
-        return _reservation_from_row(row) if row is not None else None
-
-    async def pending(self) -> tuple[Reservation, ...]:
-        async with self._engine.connect() as connection:
-            rows = (
-                await connection.execute(
-                    _reservations()
-                    .select()
-                    .where(_reservations().c.state == ReservationState.PENDING.value)
-                )
-            ).all()
-        return tuple(_reservation_from_row(row) for row in rows)
+def _keys_payload(keys: tuple[CounterKey, ...]) -> list[dict[str, str]]:
+    return [
+        {
+            "scope_type": key.scope_type.value,
+            "scope_id": key.scope_id,
+            "period": key.period.value,
+            "period_start": key.period_start.isoformat(),
+        }
+        for key in keys
+    ]
 
 
-def _reservations() -> Table:
-    from firebrief.db.models import BudgetReservation
-
-    return cast(Table, BudgetReservation.__table__)
-
-
-def _key_payload(key: CounterKey) -> dict[str, str]:
-    return {
-        "scope_type": key.scope_type.value,
-        "scope_id": key.scope_id,
-        "period": key.period.value,
-        "period_start": key.period_start.isoformat(),
-    }
-
-
-def _reservation_from_row(row) -> Reservation:  # type: ignore[no-untyped-def]
-    from datetime import date
-
-    from firebrief.budget.limits import Period, ScopeType
-
+def _row_to_reservation(row) -> Reservation:  # type: ignore[no-untyped-def]
     keys = tuple(
         CounterKey(
             ScopeType(item["scope_type"]),
@@ -188,10 +185,21 @@ def _reservation_from_row(row) -> Reservation:  # type: ignore[no-untyped-def]
         keys=keys,
         created_at=row.created_at,
         expires_at=row.expires_at,
-        state=ReservationState(row.state),
+        state=row.state,
     )
 
 
-def reservation_rows(engine: AsyncEngine):  # type: ignore[no-untyped-def]
-    """A helper for tests that need to look at the rows directly."""
-    return PostgresReservationStore(engine)
+class PostgresLedger(Ledger):
+    def __init__(self, engine: AsyncEngine) -> None:
+        self._engine = engine
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncGenerator[LedgerTransaction]:
+        async with self._engine.begin() as connection:
+            yield _PostgresTransaction(connection)
+
+
+def reservation_table() -> Table:
+    from firebrief.db.models import BudgetReservation
+
+    return BudgetReservation.__table__  # type: ignore[return-value]

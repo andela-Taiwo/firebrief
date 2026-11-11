@@ -21,6 +21,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision: str = "0011_budget_ledger"
 down_revision: str | None = "0010_auth_followups"
@@ -59,7 +60,7 @@ def upgrade() -> None:
         sa.Column("request_id", sa.String(length=64), nullable=False),
         sa.Column("model", sa.String(length=80), nullable=False),
         sa.Column("amount", sa.BigInteger(), nullable=False),
-        sa.Column("keys", sa.JSON(), nullable=False),
+        sa.Column("keys", postgresql.JSONB(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("state", sa.String(length=16), nullable=False, server_default="pending"),
@@ -79,6 +80,8 @@ def upgrade() -> None:
         op.execute(f'revoke all on {table} from "{role}"')
         # No DELETE: a reservation is a record of what was charged.
         op.execute(f'grant select, insert, update on {table} to "{role}"')
+    # The app may only move a reservation's state; amount and keys are immutable.
+    op.execute(f'grant update (state) on budget_reservations to "{role}"')
 
 
 def downgrade() -> None:

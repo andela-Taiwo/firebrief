@@ -12,7 +12,6 @@ from datetime import date, datetime
 
 import uuid6
 from sqlalchemy import (
-    JSON,
     BigInteger,
     CheckConstraint,
     Date,
@@ -29,7 +28,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 NAMING_CONVENTION = {
@@ -307,7 +306,7 @@ class BudgetReservation(Base):
     request_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     model: Mapped[str] = mapped_column(String(80), nullable=False)
     amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    keys: Mapped[list[dict[str, str]]] = mapped_column(JSON, nullable=False)
+    keys: Mapped[list[dict[str, str]]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     state: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
