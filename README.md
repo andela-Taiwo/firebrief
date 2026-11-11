@@ -168,6 +168,11 @@ make restart
 `make email-check` is the opposite of the endpoint: it shows the provider's rejection instead
 of swallowing it, because the endpoint must not reveal whether an address exists.
 
+Resend keys can be created **restricted to sending**. That is the right setting for this
+application, and such a key cannot list domains: `GET /domains` answers
+`401 restricted_api_key`. Check verification in the Resend dashboard instead, and use
+`make email-check` — it only sends, so it works with a restricted key.
+
 If Resend rejects a message, the endpoint still returns the same `202`; the failure is
 logged, because whether delivery failed must not reveal whether an address exists.
 
