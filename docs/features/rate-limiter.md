@@ -89,3 +89,26 @@ Canaries: skip the magic-link check; store keys in clear; fail open on an outage
 | C92 | The address is counted before the IP is allowed | blocked-IP quota test |
 | C93 | The Redis check is not exact | parallel-requests test |
 | C94 | The key is a plain hash instead of an HMAC | secret-rotation test |
+
+## Re-review 2 responses
+
+| Severity | Finding | Response |
+|---|---|---|
+| Should | The production checks were skipped whenever `environment` was not exactly `"development"` | It is a `Literal["development", "test", "production"]` and the **default is `production`**, so a deployment that forgets the variable gets the checks rather than a pass. A typo now fails validation; a test asserts it |
+| Should | `client_ip_header` is trusted on any request | Documented in the setting: it is only trustworthy when the app cannot be reached except through that platform. The deployment docs repeat it |
+| Should | IPv6 users own a /64 and could rotate for free | Addresses are bucketed by `/64` prefix. A test sends two addresses in one /64 and expects the second to be refused, and one from a different /64 to pass |
+| Minor | `RateLimit-Reset` is the whole window | Documented as an upper bound in the helper |
+| Minor | Two limits overwrite each other's headers | The tighter one wins: headers only move when `remaining` is lower. The test puts the tighter limit first, so "last write wins" would fail it |
+| Minor | Headers were lost when a route returned its own `JSONResponse` | Copied onto the returned response, so a budget `429`/`503` still carries them |
+| Minor | Refusals carried no rate-limit headers | Added, with `Retry-After`; the limiter's `503` sends `Retry-After: 5` |
+| Minor | `/verify` reused the link window | `verify_window_seconds` is its own setting |
+| Minor | Secrets were not required to be strong | Production requires at least 32 characters, tested |
+| Minor | A failed rollback inflates the count until the window passes | Noted in the module docstring: it fails safe and is short-lived |
+
+### Canaries
+
+| # | Break | Caught by |
+|---|---|---|
+| C95 | `environment` becomes a free string | unknown-environment test |
+| C96 | IPv6 counted per address | /64 test |
+| C97 | Headers overwritten by the later limit | tighter-limit test |

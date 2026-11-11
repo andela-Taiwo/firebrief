@@ -12,6 +12,7 @@ Rules that hold across every route:
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 import time
@@ -86,6 +87,8 @@ def create_app(
                 )
             if settings.rate_limit_secret == DEVELOPMENT_SECRET:
                 raise RuntimeError("set rate_limit_secret in production")
+            if len(settings.rate_limit_secret) < 32:
+                raise RuntimeError("rate_limit_secret must be at least 32 characters")
         yield
 
     app = FastAPI(title="Firebrief", version="0.1.0", lifespan=lifespan)
@@ -186,7 +189,7 @@ def create_app(
         limited = await _enforce(
             limiter,
             key_for("verify:ip", _client_ip(request, settings), settings.rate_limit_secret),
-            Limit(settings.verify_ip_limit, settings.link_window_seconds),
+            Limit(settings.verify_ip_limit, settings.verify_window_seconds),
             response,
         )
         if limited is not None:
@@ -265,7 +268,11 @@ def create_app(
         payload = AnswerResponse.from_result(result)
         status_code = _status_for(result)
         if status_code != status.HTTP_200_OK:
-            return JSONResponse(payload.model_dump(mode="json"), status_code=status_code)
+            refusal = JSONResponse(payload.model_dump(mode="json"), status_code=status_code)
+            # The rate-limit headers were set on the injected response; keep them.
+            for name, value in response.headers.items():
+                refusal.headers.setdefault(name, value)
+            return refusal
         return payload
 
     return app
@@ -282,17 +289,30 @@ async def _enforce(
         return JSONResponse(
             {"detail": "rate limiting unavailable"},
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            headers={"retry-after": "5"},
         )
+    headers = _rate_headers(decision, limit)
     if decision.allowed:
-        response.headers["ratelimit-limit"] = str(decision.limit)
-        response.headers["ratelimit-remaining"] = str(decision.remaining)
-        response.headers["ratelimit-reset"] = str(limit.window_seconds)
+        # Two limits on one route: the tighter one is what the client should see.
+        current = response.headers.get("ratelimit-remaining")
+        if current is None or decision.remaining < int(current):
+            for name, value in headers.items():
+                response.headers[name] = value
         return None
     return JSONResponse(
         {"detail": "too many requests"},
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        headers={"retry-after": str(decision.retry_after_seconds)},
+        headers={**headers, "retry-after": str(decision.retry_after_seconds)},
     )
+
+
+def _rate_headers(decision, limit) -> dict[str, str]:  # type: ignore[no-untyped-def]
+    # Reset is an upper bound: the whole window, not the time until a slot frees up.
+    return {
+        "ratelimit-limit": str(decision.limit),
+        "ratelimit-remaining": str(decision.remaining),
+        "ratelimit-reset": str(limit.window_seconds),
+    }
 
 
 def _client_ip(request: Request, settings: Settings) -> str:
@@ -304,16 +324,27 @@ def _client_ip(request: Request, settings: Settings) -> str:
     if settings.client_ip_header:
         value = request.headers.get(settings.client_ip_header)
         if value:
-            return value.strip()
+            return _bucket_ip(value.strip())
 
     if settings.trusted_proxy_hops > 0:
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
             parts = [part.strip() for part in forwarded.split(",") if part.strip()]
             if len(parts) >= settings.trusted_proxy_hops:
-                return parts[-settings.trusted_proxy_hops]
+                return _bucket_ip(parts[-settings.trusted_proxy_hops])
 
-    return request.client.host if request.client else "unknown"
+    return _bucket_ip(request.client.host if request.client else "unknown")
+
+
+def _bucket_ip(value: str) -> str:
+    """IPv6 users own a /64, so counting single addresses would not limit them."""
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return value
+    if address.version == 6:
+        return str(ipaddress.ip_network(f"{address}/64", strict=False).network_address)
+    return str(address)
 
 
 def _status_for(result) -> int:  # type: ignore[no-untyped-def]
