@@ -20,6 +20,11 @@ REVIEWED_GLOBAL_TABLES = {
     "document_versions",
     "sections",
     "chunks",
+    # The budget ledger is keyed by opaque scope ids (org/team/user), has no tenant
+    # column, and is only read through BudgetService. Tenant scoping for it is recorded
+    # as open in docs/features/budget-durability.md rather than implied.
+    "budget_counters",
+    "budget_reservations",
 }
 
 # One canonical expression, compared exactly after normalisation. Fragment

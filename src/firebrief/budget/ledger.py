@@ -12,9 +12,9 @@ is deliberately narrow so that swap is a configuration change, not a rewrite.
 
 from __future__ import annotations
 
-import threading
-from collections.abc import Generator, Iterable
-from contextlib import AbstractContextManager, contextmanager
+import asyncio
+from collections.abc import AsyncGenerator, Iterable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
 from typing import Protocol
@@ -42,28 +42,28 @@ class Counter:
 
 
 class LedgerTransaction(Protocol):
-    def get(self, key: CounterKey) -> Counter: ...
+    async def get(self, key: CounterKey) -> Counter: ...
 
-    def set(self, key: CounterKey, counter: Counter) -> None: ...
+    async def set(self, key: CounterKey, counter: Counter) -> None: ...
 
-    def keys(self) -> Iterable[CounterKey]: ...
+    async def keys(self) -> Iterable[CounterKey]: ...
 
 
 class Ledger(Protocol):
-    def transaction(self) -> AbstractContextManager[LedgerTransaction]: ...
+    def transaction(self) -> AbstractAsyncContextManager[LedgerTransaction]: ...
 
 
 class _InMemoryTransaction:
     def __init__(self, rows: dict[CounterKey, Counter]) -> None:
         self._rows = rows
 
-    def get(self, key: CounterKey) -> Counter:
+    async def get(self, key: CounterKey) -> Counter:
         return self._rows.get(key, Counter())
 
-    def set(self, key: CounterKey, counter: Counter) -> None:
+    async def set(self, key: CounterKey, counter: Counter) -> None:
         self._rows[key] = counter
 
-    def keys(self) -> Iterable[CounterKey]:
+    async def keys(self) -> Iterable[CounterKey]:
         return tuple(self._rows)
 
 
@@ -72,13 +72,13 @@ class InMemoryLedger:
 
     def __init__(self) -> None:
         self._rows: dict[CounterKey, Counter] = {}
-        self._lock = threading.RLock()
+        self._lock = asyncio.Lock()
 
-    @contextmanager
-    def transaction(self) -> Generator[_InMemoryTransaction]:
-        with self._lock:
+    @asynccontextmanager
+    async def transaction(self) -> AsyncGenerator[_InMemoryTransaction]:
+        async with self._lock:
             yield _InMemoryTransaction(self._rows)
 
     def snapshot(self) -> dict[CounterKey, Counter]:
-        with self._lock:
-            return dict(self._rows)
+        """A plain copy for assertions; no lock, because the tests drive it single-threaded."""
+        return dict(self._rows)

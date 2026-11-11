@@ -8,7 +8,7 @@ overspend a limit: it is refused before it can start.
 
 from __future__ import annotations
 
-import threading
+import asyncio
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -107,28 +107,28 @@ class BudgetPolicy:
 
 
 class ReservationStore(Protocol):
-    def add(self, reservation: Reservation) -> None: ...
+    async def add(self, reservation: Reservation) -> None: ...
 
-    def get(self, reservation_id: str) -> Reservation | None: ...
+    async def get(self, reservation_id: str) -> Reservation | None: ...
 
-    def pending(self) -> tuple[Reservation, ...]: ...
+    async def pending(self) -> tuple[Reservation, ...]: ...
 
 
 class InMemoryReservationStore:
     def __init__(self) -> None:
         self._items: dict[str, Reservation] = {}
-        self._lock = threading.RLock()
+        self._lock = asyncio.Lock()
 
-    def add(self, reservation: Reservation) -> None:
-        with self._lock:
+    async def add(self, reservation: Reservation) -> None:
+        async with self._lock:
             self._items[reservation.id] = reservation
 
-    def get(self, reservation_id: str) -> Reservation | None:
-        with self._lock:
+    async def get(self, reservation_id: str) -> Reservation | None:
+        async with self._lock:
             return self._items.get(reservation_id)
 
-    def pending(self) -> tuple[Reservation, ...]:
-        with self._lock:
+    async def pending(self) -> tuple[Reservation, ...]:
+        async with self._lock:
             return tuple(r for r in self._items.values() if r.state is ReservationState.PENDING)
 
 
@@ -178,7 +178,7 @@ class BudgetService:
             raise ValueError("prompt_tokens must not be negative")
         return self.prices.price(model).worst_case(prompt_tokens, max_output_tokens)
 
-    def reserve(
+    async def reserve(
         self,
         *,
         request_id: str,
@@ -208,11 +208,11 @@ class BudgetService:
             for limit in limits
         ]
 
-        with self.ledger.transaction() as txn:
+        async with self.ledger.transaction() as txn:
             warnings: list[BudgetWarning] = []
             failures: list[Rejection] = []
             for limit, key in entries:
-                counter = txn.get(key)
+                counter = await txn.get(key)
                 ratio = _ratio(counter.used, amount, limit.amount)
                 if counter.used + amount > limit.amount:
                     failures.append(
@@ -230,8 +230,8 @@ class BudgetService:
                 )
 
             for _limit, key in entries:
-                counter = txn.get(key)
-                txn.set(key, replace(counter, reserved=counter.reserved + amount))
+                counter = await txn.get(key)
+                await txn.set(key, replace(counter, reserved=counter.reserved + amount))
 
             reservation = Reservation(
                 id=str(uuid.uuid4()),
@@ -242,23 +242,25 @@ class BudgetService:
                 created_at=now,
                 expires_at=now + self.policy.reservation_ttl,
             )
-            self.store.add(reservation)
+            await self.store.add(reservation)
 
         return Decision(admitted=True, reservation=reservation, warnings=tuple(warnings))
 
-    def settle(self, reservation_id: str, *, input_tokens: int, output_tokens: int) -> Settlement:
+    async def settle(
+        self, reservation_id: str, *, input_tokens: int, output_tokens: int
+    ) -> Settlement:
         if input_tokens < 0 or output_tokens < 0:
             raise ValueError("token counts must not be negative")
-        reservation = self._require_pending(reservation_id)
+        reservation = await self._require_pending(reservation_id)
         charged = self.prices.price(reservation.model).cost(input_tokens, output_tokens)
         effective = min(charged, reservation.amount)
         overage = charged - effective
         now = self.clock()
 
-        with self.ledger.transaction() as txn:
+        async with self.ledger.transaction() as txn:
             for key in reservation.keys:
-                counter = txn.get(key)
-                txn.set(
+                counter = await txn.get(key)
+                await txn.set(
                     key,
                     replace(
                         counter,
@@ -266,36 +268,36 @@ class BudgetService:
                         spent=counter.spent + effective,
                     ),
                 )
-            self.store.add(replace(reservation, state=ReservationState.SETTLED))
+            await self.store.add(replace(reservation, state=ReservationState.SETTLED))
 
         return Settlement(
             reservation_id=reservation_id,
             reserved=reservation.amount,
             charged=effective,
             overage=overage,
-            warnings=self._warnings_now(reservation, now),
+            warnings=await self._warnings_now(reservation, now),
         )
 
-    def release(self, reservation_id: str) -> None:
-        reservation = self._require_pending(reservation_id)
-        with self.ledger.transaction() as txn:
+    async def release(self, reservation_id: str) -> None:
+        reservation = await self._require_pending(reservation_id)
+        async with self.ledger.transaction() as txn:
             for key in reservation.keys:
-                counter = txn.get(key)
-                txn.set(key, replace(counter, reserved=counter.reserved - reservation.amount))
-            self.store.add(replace(reservation, state=ReservationState.RELEASED))
+                counter = await txn.get(key)
+                await txn.set(key, replace(counter, reserved=counter.reserved - reservation.amount))
+            await self.store.add(replace(reservation, state=ReservationState.RELEASED))
 
-    def sweep(self, now: datetime | None = None) -> int:
+    async def sweep(self, now: datetime | None = None) -> int:
         """Release reservations whose holder died before settling them."""
         moment = now or self.clock()
         released = 0
-        for reservation in self.store.pending():
+        for reservation in await self.store.pending():
             if reservation.expires_at <= moment:
-                self.release(reservation.id)
+                await self.release(reservation.id)
                 released += 1
         return released
 
-    def _require_pending(self, reservation_id: str) -> Reservation:
-        reservation = self.store.get(reservation_id)
+    async def _require_pending(self, reservation_id: str) -> Reservation:
+        reservation = await self.store.get(reservation_id)
         if reservation is None:
             raise UnknownReservationError(reservation_id)
         if reservation.state is not ReservationState.PENDING:
@@ -304,19 +306,21 @@ class BudgetService:
             )
         return reservation
 
-    def _warnings_now(self, reservation: Reservation, now: datetime) -> tuple[BudgetWarning, ...]:
+    async def _warnings_now(
+        self, reservation: Reservation, now: datetime
+    ) -> tuple[BudgetWarning, ...]:
         warnings: list[BudgetWarning] = []
         limits = self.limits.for_ids(
             org_id=_scope_id(reservation, ScopeType.ORG),
             team_id=_scope_id(reservation, ScopeType.TEAM),
             user_id=_scope_id(reservation, ScopeType.USER),
         )
-        with self.ledger.transaction() as txn:
+        async with self.ledger.transaction() as txn:
             for limit in limits:
                 key = CounterKey(
                     limit.scope_type, limit.scope_id, limit.period, period_start(now, limit.period)
                 )
-                counter = txn.get(key)
+                counter = await txn.get(key)
                 ratio = counter.used / limit.amount
                 if ratio >= self.policy.soft_ratio:
                     warnings.append(BudgetWarning(limit, counter.used, 0, ratio))
