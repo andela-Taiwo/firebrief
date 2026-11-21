@@ -2,10 +2,11 @@
 
 Cited answers to UK fire safety guidance questions, with enterprise controls.
 
-> **Status: core answer engine built and tested; no API or UI yet.**
-> Ingestion, retrieval, citation verification, refusals, budgets, tenant isolation and PII
-> redaction exist as a tested Python library. There is no HTTP API, web UI, audit log or
-> live evaluation yet, and nothing is deployed. See [Roadmap](#roadmap).
+> **Status: answer engine and HTTP API built and tested; no web UI yet.**
+> Ingestion, retrieval, citation verification, refusals, durable budgets, tenant isolation and
+> PII redaction are in place, behind an HTTP API with magic-link sign-in and rate limiting.
+> There is no web UI, audit log or live evaluation yet, and nothing is deployed. See
+> [Roadmap](#roadmap).
 >
 > **Firebrief records and cites. It does not replace a competent person.** Nothing here should
 > be used to make a fire safety decision.
@@ -114,12 +115,14 @@ make secrets          # scan the full git history for secrets
 ```
 src/firebrief/
   answer/      # prompt, citation verifier, judge, refusals, pipeline
-  auth/        # magic-link auth (in progress)
-  budget/      # pricing, estimates, reservations, ledger, budget service
+  api/         # FastAPI app: health, sign-in and answer endpoints
+  auth/        # magic-link sign-in and sessions
+  budget/      # pricing, estimates, reservations, durable ledger, budget service
   db/          # models, sessions, tenant context, role checks
   guardrails/  # PII redaction
   ingest/      # manifest, sources, parsing, versions, chunking, embeddings
   llm/         # provider interface, Anthropic and OpenAI adapters, router, fake provider
+  ratelimit/   # per-key rate limits, Redis and in-memory backends
   retrieval/   # hybrid search and rank fusion
 migrations/    # Alembic migrations, including RLS policies, grants and append-only triggers
 corpus/        # the reviewed source manifest
@@ -148,12 +151,11 @@ tests/         # unit, property, concurrency and database tests
 
 The full plan, in dependency order, is in [`docs/ROADMAP.md`](docs/ROADMAP.md). Next up:
 
-- **Auth**: magic-link sign-in with hashed, single-use, expiring links (in progress), with an
-  OIDC adapter behind the same interface later
-- **Audit log**: append-only record of every question, the evidence and the outcome
+- **Web UI**: ask a question, see the answer with its citations or the refusal
 - **Evaluation harness**: the labelled question set and results table described above
-- **API and web UI**: ask a question, see the answer with its citations or the refusal
-- **Durable budgets, rate limiting, observability and deployment**
+- **Audit log**: append-only record of every question, the evidence and the outcome
+- **OIDC sign-in**: an adapter behind the same interface as magic links
+- **Observability and deployment**
 
 ## How this is being built
 

@@ -16,3 +16,7 @@ evals/**/out/
 .hypothesis/
 .import_linter_cache/
 .docker/
+
+# web build output
+*.tsbuildinfo
+vite.config.ts.timestamp-*
